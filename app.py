@@ -3,6 +3,7 @@
 import streamlit as st
 import pandas as pd
 import os
+import re  # <--- TAMBAHKAN INI UNTUK MEMBACA TEKS
 
 # Import engine yang sudah kita buat
 try:
@@ -77,13 +78,42 @@ harga_tenaga = {
     "Mandor (L.04)": harga_mandor,
 }
 
-# --- LOGIC EXTRACTION KOEFISIEN ---
-# Asumsi: Di Excel kamu ada kolom 'koef_pekerja' dan 'koef_mandor'
-# Jika struktur excel beda, sesuaikan bagian ini.
+# ==============================
+# LOGIC EXTRACTION (SMART PARSING)
+# ==============================
+# Mengambil angka koefisien langsung dari teks "tenaga_detail"
+# Contoh teks: "Pekerja (L.01) 0.050 OH; Mandor (L.04) 0.005 OH"
+
+detail_text = row.get("tenaga_detail", "")
+
+def ambil_koefisien(pola_nama, teks):
+    # Cari angka desimal yang muncul setelah nama tenaga kerja
+    match = re.search(rf"{re.escape(pola_nama)}\s+([\d\.]+)", teks)
+    if match:
+        return float(match.group(1))
+    return 0.0
+
+# Kita parsing otomatis, jadi tidak butuh kolom koefisien di Excel
+koef_pekerja = ambil_koefisien("Pekerja (L.01)", detail_text)
+koef_mandor = ambil_koefisien("Mandor (L.04)", detail_text)
+
 koefisien_tenaga = {
-    "Pekerja (L.01)": row.get("koef_pekerja", 0), # Default 0 jika kolom tak ada
-    "Mandor (L.04)": row.get("koef_mandor", 0),
+    "Pekerja (L.01)": koef_pekerja,
+    "Mandor (L.04)": koef_mandor,
 }
+
+# Debugging Visual (Opsional: biar kamu yakin angkanya kebaca)
+st.sidebar.markdown("---")
+st.sidebar.caption("🔍 Auto-Detected Koefisien:")
+st.sidebar.text(f"Pekerja: {koef_pekerja}")
+st.sidebar.text(f"Mandor : {koef_mandor}")
+
+# ==============================
+# TOMBOL HITUNG (Tetap sama)
+# ==============================
+if st.sidebar.button("Tambah ke BOQ"):
+    # ... (lanjutan kode sama seperti sebelumnya)
+
 
 if st.sidebar.button("Tambah ke BOQ"):
     # Panggil fungsi hitung dari Engine
@@ -136,3 +166,4 @@ else:
 st.markdown("---")
 st.subheader("Detail AHSP Reference")
 st.json(row.to_dict()) # Tampilkan raw data untuk debug
+
