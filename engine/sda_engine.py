@@ -1,89 +1,44 @@
-"""
-ENGINE RAB SDA – PHASE 1 (CORE)
-Versi update:
-- Tenaga + Bahan + Alat
-- Database AHSP TIDAK diubah
-- Audit-safe & deterministik
-"""
+# File: engine/sda_engine.py
 
-import pandas as pd
-from typing import Dict
-
-AHSP_FILE = "data/ahsp_sda_2025_tanah_manual_core.xlsx"
-
-# ==============================
-# LOAD AHSP DATABASE
-# ==============================
-def load_ahsp(path: str = AHSP_FILE) -> pd.DataFrame:
-    return pd.read_excel(path, sheet_name="ahsp_tanah_manual_core")
-
-# ==============================
-# PARSER UMUM (TENAGA / BAHAN / ALAT)
-# ==============================
-def parse_detail(detail: str) -> Dict[str, float]:
+def hitung_rab(kode_ahsp, volume, harga_tenaga, koefisien_tenaga, uraian_pekerjaan, satuan):
     """
-    contoh:
-    'Pekerja (L.01) 0.050; Mandor (L.04) 0.005'
-    'Semen 50kg 0.12; Pasir 0.045'
+    Menghitung RAB per item pekerjaan (Deterministik).
+    
+    Args:
+        kode_ahsp (str): Kode item (contoh: T.01)
+        volume (float): Volume pekerjaan
+        harga_tenaga (dict): Dict harga satuan upah { 'Pekerja (L.01)': 100000, ... }
+        koefisien_tenaga (dict): Dict koefisien { 'Pekerja (L.01)': 0.5, ... }
+        uraian_pekerjaan (str): Nama pekerjaan
+        satuan (str): Satuan (m3, m2, dll)
+    
+    Returns:
+        dict: Summary perhitungan untuk tabel BOQ
     """
-    result = {}
-    if not isinstance(detail, str) or detail.strip() in ["", "-"]:
-        return result
+    
+    # 1. Hitung Harga Satuan Pekerjaan (HSP)
+    hsp_tenaga = 0.0
+    
+    # Loop setiap tenaga kerja (Pekerja, Mandor, dll)
+    for jenis_tenaga, harga_upah in harga_tenaga.items():
+        # Ambil koefisien jika ada, jika tidak 0
+        koef = koefisien_tenaga.get(jenis_tenaga, 0.0)
+        biaya = koef * harga_upah
+        hsp_tenaga += biaya
 
-    parts = detail.split(";")
-    for p in parts:
-        p = p.strip()
-        if not p:
-            continue
-        name, value = p.rsplit(" ", 1)
-        result[name.strip()] = float(value)
-    return result
+    # Total Harga Satuan (HSP)
+    # (Di sini baru tenaga, nanti bisa ditambah bahan/alat di Phase selanjutnya)
+    harga_satuan_final = hsp_tenaga 
 
-# ==============================
-# HITUNG BIAYA KOMPONEN
-# ==============================
-def hitung_biaya(detail: str, harga: Dict[str, float]) -> float:
-    biaya = 0.0
-    komponen = parse_detail(detail)
-    for nama, koef in komponen.items():
-        biaya += koef * harga.get(nama, 0)
-    return biaya
+    # 2. Hitung Total Harga (Volume x Harga Satuan)
+    total_harga = volume * harga_satuan_final
 
-# ==============================
-# HITUNG HARGA SATUAN & TOTAL
-# ==============================
-def hitung_rab(
-    kode_ahsp: str,
-    volume: float,
-    harga_tenaga: Dict[str, float],
-    harga_bahan: Dict[str, float] = None,
-    harga_alat: Dict[str, float] = None,
-):
-    harga_bahan = harga_bahan or {}
-    harga_alat = harga_alat or {}
-
-    df = load_ahsp()
-    row = df[df["kode_ahsp"] == kode_ahsp]
-    if row.empty:
-        raise ValueError(f"AHSP {kode_ahsp} tidak ditemukan")
-
-    row = row.iloc[0]
-
-    biaya_tenaga = hitung_biaya(row["tenaga_detail"], harga_tenaga)
-    biaya_bahan = hitung_biaya(row["bahan_detail"], harga_bahan)
-    biaya_alat = hitung_biaya(row["alat_detail"], harga_alat)
-
-    harga_satuan = biaya_tenaga + biaya_bahan + biaya_alat
-    total = harga_satuan * volume
-
+    # 3. Return Dictionary untuk ditampilkan di Tabel
     return {
-        "kode_ahsp": row["kode_ahsp"],
-        "uraian": row["uraian_pekerjaan"],
-        "satuan": row["satuan"],
+        "kode_ahsp": kode_ahsp,
+        "uraian": uraian_pekerjaan,
+        "satuan": satuan,
         "volume": volume,
-        "biaya_tenaga": biaya_tenaga,
-        "biaya_bahan": biaya_bahan,
-        "biaya_alat": biaya_alat,
-        "harga_satuan": harga_satuan,
-        "total": total,
+        "harga_satuan": harga_satuan_final,
+        "total": total_harga
     }
