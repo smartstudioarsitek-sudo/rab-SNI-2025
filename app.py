@@ -81,38 +81,49 @@ harga_tenaga = {
 # ==============================
 # LOGIC EXTRACTION (SMART PARSING)
 # ==============================
-# Mengambil angka koefisien langsung dari teks "tenaga_detail"
-# Contoh teks: "Pekerja (L.01) 0.050 OH; Mandor (L.04) 0.005 OH"
+# Pastikan sudah import re di paling atas file: import re
 
 detail_text = row.get("tenaga_detail", "")
 
 def ambil_koefisien(pola_nama, teks):
-    # Cari angka desimal yang muncul setelah nama tenaga kerja
+    # Cari angka desimal setelah nama tenaga
     match = re.search(rf"{re.escape(pola_nama)}\s+([\d\.]+)", teks)
     if match:
-        return float(match.group(1))
+        return float(match.group(1)) # <--- INI BAGIAN YANG PENTING (DI-TAB)
     return 0.0
 
-# Kita parsing otomatis, jadi tidak butuh kolom koefisien di Excel
+# Ambil Koefisien
 koef_pekerja = ambil_koefisien("Pekerja (L.01)", detail_text)
 koef_mandor = ambil_koefisien("Mandor (L.04)", detail_text)
 
+# Masukkan ke dictionary
 koefisien_tenaga = {
     "Pekerja (L.01)": koef_pekerja,
     "Mandor (L.04)": koef_mandor,
 }
 
-# Debugging Visual (Opsional: biar kamu yakin angkanya kebaca)
+# Tampilkan info debugger di sidebar (biar yakin angkanya masuk)
 st.sidebar.markdown("---")
-st.sidebar.caption("🔍 Auto-Detected Koefisien:")
-st.sidebar.text(f"Pekerja: {koef_pekerja}")
-st.sidebar.text(f"Mandor : {koef_mandor}")
+st.sidebar.caption(f"🔍 Auto-Detect: P={koef_pekerja}, M={koef_mandor}")
 
 # ==============================
-# TOMBOL HITUNG (Tetap sama)
+# TOMBOL HITUNG
 # ==============================
 if st.sidebar.button("Tambah ke BOQ"):
-    # ... (lanjutan kode sama seperti sebelumnya)
+    try:
+        # Panggil fungsi hitung dari Engine
+        hasil = sda_engine.hitung_rab(
+            kode_ahsp=kode_terpilih,
+            volume=volume,
+            harga_tenaga=harga_tenaga,
+            koefisien_tenaga=koefisien_tenaga,
+            uraian_pekerjaan=row["uraian_pekerjaan"],
+            satuan=row["satuan"]
+        )
+        st.session_state.boq.append(hasil)
+        st.sidebar.success("✅ Item berhasil ditambahkan!")
+    except Exception as e:
+        st.sidebar.error(f"Gagal menghitung: {e}")
 
 
 if st.sidebar.button("Tambah ke BOQ"):
@@ -166,4 +177,5 @@ else:
 st.markdown("---")
 st.subheader("Detail AHSP Reference")
 st.json(row.to_dict()) # Tampilkan raw data untuk debug
+
 
