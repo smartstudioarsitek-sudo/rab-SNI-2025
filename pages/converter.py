@@ -1,118 +1,136 @@
 import streamlit as st
 import pandas as pd
 import re
+import io
 
-st.set_page_config(page_title="Mesin Konversi V5 (Final)", page_icon="🏭")
-st.title("🏭 Mesin Pencetak Database AHSP (V5 - Strict Mode)")
-st.info("💡 Tips: Sebaiknya upload file Excel yang HANYA berisi sheet Analisa. Hapus sheet Rekap/BBS sebelum upload supaya hasil bersih.")
+st.set_page_config(page_title="Mesin Konversi V6 (Massal)", page_icon="🏭")
+st.title("🏭 Mesin Pencetak Database AHSP (V6 - Mass Upload)")
+st.info("Tip: Blok semua file CSV/Excel yang sudah dipisah, lalu tarik ke sini sekaligus.")
 
 # ==========================================
-# 1. CORE LOGIC (PENCARI KOEFISIEN)
+# 1. CORE LOGIC (SCANNER BARIS)
 # ==========================================
 
-def clean_number(value):
-    """Membersihkan angka dari string (misal: 'Rp 15.000' -> 15000.0)"""
+def clean_decimal(s):
+    """Membersihkan format angka 1.000,00 menjadi 1000.0"""
+    s = str(s).strip()
+    # Hapus Rp dan spasi
+    s = s.replace('Rp', '').replace(' ', '')
+    
+    # Cek format desimal Indonesia (koma) vs US (titik)
+    if ',' in s and '.' in s: 
+        s = s.replace('.', '').replace(',', '.') # 1.000,00 -> 1000.00
+    elif ',' in s: 
+        s = s.replace(',', '.') # 0,05 -> 0.05
+        
     try:
-        if pd.isna(value): return 0.0
-        s = str(value).replace('Rp', '').replace(' ', '')
-        
-        # Cek format 1.000,00 (Indo) vs 1000.00 (US)
-        if ',' in s and '.' in s: s = s.replace('.', '').replace(',', '.') # Indo -> US
-        elif ',' in s: s = s.replace(',', '.') # Koma desimal -> Titik
-        
         return float(s)
     except:
         return 0.0
 
-def process_sheet_strict(df):
+def parse_content(df_raw, source_filename):
     """
-    Hanya mengambil data jika menemukan pola tabel AHSP yang valid:
-    [Kode] [Uraian] ... [Koefisien]
+    Membaca DataFrame mentah dan mencari pola Analisa AHSP.
+    Mengabaikan header tebal di atas.
     """
     data_list = []
     
-    # 1. CARI LOKASI KOLOM KOEFISIEN
-    # Kita cari baris yang mengandung kata "KOEFISIEN" di header
-    start_row = 0
-    col_koef = -1
-    col_uraian = -1
-    col_kode = 0 # Default kolom pertama
+    # Konversi ke List of Lists (String) biar mudah diproses
+    rows = df_raw.fillna("").astype(str).values.tolist()
     
-    # Scan 20 baris pertama untuk cari header
-    for r in range(min(20, len(df))):
-        row_vals = [str(x).upper() for x in df.iloc[r].tolist()]
-        if "KOEFISIEN" in row_vals or "KOEF" in row_vals:
-            start_row = r + 1
-            # Cari index kolom
-            for c, val in enumerate(row_vals):
-                if "KOEF" in val: col_koef = c
-                if "URAIAN" in val: col_uraian = c
-            break
-    
-    if col_koef == -1:
-        return [] # Skip sheet ini karena tidak ada tabel analisa
-
-    # Jika kolom uraian tidak ketemu header-nya, asumsi di kolom ke-1
-    if col_uraian == -1: col_uraian = 1
-
-    # 2. SCAN DATA KE BAWAH
     current_item = {}
-    mode = None # Tenaga/Bahan/Alat
+    mode = None # tenaga / bahan / alat
     
-    for r in range(start_row, len(df)):
-        row = df.iloc[r].tolist()
+    for row in rows:
+        # Bersihkan spasi di setiap sel
+        row = [cell.strip() for cell in row]
+        row_text = " ".join(row).upper()
         
-        # Ambil nilai sel penting
-        val_kode = str(row[col_kode]).strip() if len(row) > col_kode else ""
-        val_uraian = str(row[col_uraian]).strip() if len(row) > col_uraian else ""
-        val_koef = row[col_koef] if len(row) > col_koef else 0
+        # --- 1. DETEKSI JUDUL PEKERJAAN (HEADER ANALISA) ---
+        # Pola: Ada Kode (Angka.Angka) di kolom awal, dan Uraian panjang di kanannya
+        found_header = False
         
-        # --- A. DETEKSI JUDUL PEKERJAAN BARU ---
-        # Ciri: Ada Kode (angka.angka) DAN Uraian panjang
-        if re.match(r'^[A-Z0-9]+\.[\d\.]+$', val_kode) and len(val_kode) < 20:
-            # Validasi tambahan: Uraian harus panjang (bukan cuma "Beton")
-            if len(val_uraian) > 5:
-                # Simpan yang lama
-                if current_item: data_list.append(export_item(current_item))
+        # Cek kolom 0 sampai 5 (siapa tau kolomnya geser)
+        for i in range(min(5, len(row))):
+            cell = row[i]
+            # Regex: Minimal 2 segmen angka (misal 2.2.1 atau 6.4.1)
+            # Dan panjang kode tidak boleh terlalu panjang (bukan kalimat)
+            if re.match(r'^[A-Z0-9]+\.[\d\.]+$', cell) and len(cell) < 15:
                 
-                # Reset baru
-                current_item = {
-                    'kode': val_kode, 'uraian': val_uraian, 'satuan': 'ls',
-                    'tenaga': [], 'bahan': [], 'alat': []
-                }
+                # Cek sebelah kanannya ada Uraian?
+                uraian = ""
+                satuan = "ls"
                 
-                # Coba cari satuan di kolom-kolom sebelah uraian
-                for c in range(col_uraian+1, len(row)):
-                    s = str(row[c]).lower().strip()
-                    if s in ['m', "m'", 'm2', 'm3', 'bh', 'buah', 'unit', 'kg', 'set', 'ls']:
-                        current_item['satuan'] = s
+                # Cari teks panjang di sebelah kanan kode
+                for j in range(i+1, min(i+5, len(row))):
+                    if len(row[j]) > 5 and not re.match(r'^[\d\.,]+$', row[j]): # Teks, bukan angka
+                        uraian = row[j]
+                        
+                        # Cek satuan di kanannya lagi
+                        if j+1 < len(row):
+                            val_sat = row[j+1].lower()
+                            if val_sat in ['m', "m'", 'm2', 'm3', 'bh', 'buah', 'unit', 'kg', 'set', 'ls', 'titik']:
+                                satuan = val_sat
                         break
                 
-                mode = None
-                continue
-
-        # --- B. DETEKSI KATEGORI ---
-        txt_row = " ".join([str(x) for x in row]).upper()
-        if "TENAGA" in txt_row and "JUMLAH" not in txt_row: mode = 'tenaga'; continue
-        if "BAHAN" in txt_row and "JUMLAH" not in txt_row: mode = 'bahan'; continue
-        if ("ALAT" in txt_row or "PERALATAN" in txt_row) and "JUMLAH" not in txt_row: mode = 'alat'; continue
+                # Validasi: Uraian valid (bukan judul kolom)
+                if uraian and "ANALISA" not in uraian.upper() and "JUMLAH" not in uraian.upper():
+                    # Simpan data lama
+                    if current_item: data_list.append(export_item(current_item))
+                    
+                    # Buat item baru
+                    current_item = {
+                        'kode': cell, 'uraian': uraian, 'satuan': satuan,
+                        'tenaga': [], 'bahan': [], 'alat': []
+                    }
+                    mode = None # Reset mode
+                    found_header = True
+                    break
         
-        # --- C. AMBIL ISI (RESEP) ---
-        if mode and current_item:
-            # Syarat: Ada Uraian DAN Ada Angka Koefisien Valid (> 0)
-            koef_float = clean_number(val_koef)
+        if found_header: continue
+
+        # --- 2. DETEKSI KATEGORI (TENAGA/BAHAN/ALAT) ---
+        if not current_item: continue # Jangan baca kalau belum ketemu judul pekerjaan
+        
+        if "TENAGA" in row_text and "JUMLAH" not in row_text: mode = 'tenaga'; continue
+        if "BAHAN" in row_text and "JUMLAH" not in row_text: mode = 'bahan'; continue
+        if ("ALAT" in row_text or "PERALATAN" in row_text) and "JUMLAH" not in row_text: mode = 'alat'; continue
+        
+        # --- 3. AMBIL ISI KOEFISIEN ---
+        if mode:
+            # Cari pola: [Nama Item] ... [Angka Koefisien]
+            nama_res = ""
+            koef_res = 0.0
             
-            if len(val_uraian) > 2 and koef_float > 0:
-                # Hindari baris sampah (Total, Jumlah, Overhead)
-                if any(x in val_uraian.upper() for x in ['JUMLAH', 'TOTAL', 'BIAYA', 'OVERHEAD', 'PROFIT']):
-                    continue
-                
-                # Masukkan ke resep
-                entry = f"{val_uraian} {koef_float}"
+            for i, cell in enumerate(row):
+                # Nama Item: Teks panjang, bukan angka, bukan satuan
+                if len(cell) > 2 and not re.match(r'^[\d\.,]+$', cell): 
+                    if cell.lower() in ['oh', 'orang', 'ls', 'bh', 'set', 'unit', 'sewa', 'jam', 'm3', 'kg']: continue
+                    if any(x in cell.upper() for x in ['JUMLAH', 'TOTAL', 'HARGA', 'BIAYA']): break # Stop baris ini
+                    
+                    nama_res = cell
+                    
+                    # Cari Koefisien (Angka pertama valid di sebelah kanan nama)
+                    for k in range(i+1, len(row)):
+                        val_str = row[k]
+                        # Koefisien biasanya < 1000. Kalau jutaan itu harga.
+                        # Kecuali Paku/Kawat (bisa 50 gram -> 0.05 atau 50)
+                        # Kita ambil angka pertama yang valid.
+                        if re.match(r'^[\d\.,]+$', val_str):
+                            val_float = clean_decimal(val_str)
+                            if val_float > 0:
+                                koef_res = val_float
+                                break
+                    break
+            
+            if nama_res and koef_res > 0:
+                entry = f"{nama_res} {koef_res}"
                 current_item[mode].append(entry)
 
-    # Simpan sisa terakhir
-    if current_item: data_list.append(export_item(current_item))
+    # Simpan item terakhir
+    if current_item:
+        data_list.append(export_item(current_item))
+        
     return data_list
 
 def export_item(d):
@@ -126,55 +144,67 @@ def export_item(d):
     }
 
 # ==========================================
-# 2. UI UTAMA
+# 2. UI MASS UPLOAD
 # ==========================================
 
-uploaded_file = st.file_uploader("Upload Excel Analisa (Wajib ada kolom Koefisien)", type=['xlsx'])
+# Izinkan upload banyak file sekaligus
+uploaded_files = st.file_uploader(
+    "Upload File CSV/Excel (Bisa banyak sekaligus!)", 
+    type=['csv', 'xlsx'], 
+    accept_multiple_files=True
+)
 
-if uploaded_file:
-    with st.spinner("Sedang memproses..."):
-        try:
-            xls = pd.ExcelFile(uploaded_file)
-            all_data = []
+if uploaded_files:
+    if st.button("🚀 Mulai Proses Semua File"):
+        all_master_data = []
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        total_files = len(uploaded_files)
+        
+        for i, file in enumerate(uploaded_files):
+            status_text.text(f"Sedang memproses: {file.name}...")
+            progress_bar.progress((i + 1) / total_files)
             
-            # Progress bar
-            bar = st.progress(0)
-            sheets = xls.sheet_names
+            try:
+                # BACA FILE
+                if file.name.endswith('.csv'):
+                    # Gunakan engine python biar fleksibel sama delimiter
+                    df = pd.read_csv(file, header=None, sep=None, engine='python')
+                else:
+                    df = pd.read_excel(file, header=None)
+                
+                # PARSING
+                result = parse_content(df, file.name)
+                
+                if result:
+                    all_master_data.extend(result)
+                    
+            except Exception as e:
+                st.warning(f"Gagal membaca file {file.name}: {e}")
+        
+        # --- HASIL AKHIR ---
+        if all_master_data:
+            df_final = pd.DataFrame(all_master_data)
             
-            for i, sheet in enumerate(sheets):
-                bar.progress((i+1)/len(sheets))
-                
-                # Skip sheet sampah (Opsional, filter manual lebih baik)
-                if any(x in sheet.upper() for x in ['REKAP', 'DAFTAR', 'BBS', 'VOLUME']):
-                    continue
-                
-                # Baca Sheet
-                df = pd.read_excel(xls, sheet_name=sheet, header=None)
-                
-                # Proses
-                res = process_sheet_strict(df)
-                if res:
-                    all_data.extend(res)
+            # Buang duplikat kode (kalau ada)
+            df_final = df_final.drop_duplicates(subset=['kode'])
             
-            if all_data:
-                df_final = pd.DataFrame(all_data)
-                st.success(f"✅ Berhasil mengambil **{len(df_final)}** Item Analisa!")
-                
-                # Preview
-                st.dataframe(df_final.head())
-                
-                # Download
-                csv = df_final.to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    "⬇️ Download Database Bersih",
-                    csv,
-                    "ahsp_ciptakarya_master.csv",
-                    "text/csv",
-                    type="primary"
-                )
-            else:
-                st.error("❌ Tidak ditemukan data Analisa yang valid.")
-                st.warning("Pastikan Excel Kakak punya kolom dengan judul 'Koefisien' di dalam tabel analisanya.")
-                
-        except Exception as e:
-            st.error(f"Error: {e}")
+            st.success(f"🎉 SUKSES BESAR! Total **{len(df_final)}** Analisa Pekerjaan berhasil digabung.")
+            
+            with st.expander("🔍 Lihat Hasil Gabungan"):
+                st.dataframe(df_final)
+            
+            # Download
+            csv_data = df_final.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="⬇️ Download Database Lengkap (ahsp_ciptakarya_master.csv)",
+                data=csv_data,
+                file_name="ahsp_ciptakarya_master.csv",
+                mime="text/csv",
+                type="primary"
+            )
+            st.info("Upload file hasil download ini ke folder `data/` di GitHub.")
+            
+        else:
+            st.error("Tidak ada data analisa yang ditemukan. Cek kembali file yang diupload.")
