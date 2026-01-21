@@ -3,139 +3,71 @@ import pandas as pd
 import io
 import re
 
-st.set_page_config(page_title="Mesin Konversi AHSP V3", page_icon="🏭")
-st.title("🏭 Mesin Pencetak Database AHSP (V3 - Smart Detect)")
-st.caption("Support: Excel Multi-Sheet, Kolom Geser, & Format Data_RAB")
+st.set_page_config(page_title="Mesin Konversi Universal", page_icon="🏭")
+st.title("🏭 Mesin Pencetak Database AHSP")
+st.caption("Support: CSV & Excel (Multi-Sheet)")
 
 # ==========================================
-# 1. CORE ENGINE (LOGIKA CERDAS)
+# 1. CORE ENGINE (LOGIKA PEMBACAAN)
 # ==========================================
 
-def is_number(s):
-    """Cek apakah string adalah angka"""
-    try:
-        float(str(s).replace(',', '').replace(' ', ''))
-        return True
-    except:
-        return False
-
-def clean_decimal(s):
-    """Membersihkan format angka (1.000,00 jadi 1000.00 atau 0,05 jadi 0.05)"""
-    s = str(s).strip()
-    # Kasus 1.000,00 (Indo) -> 1000.00
-    if ',' in s and '.' in s:
-        s = s.replace('.', '').replace(',', '.')
-    # Kasus 0,05 (Indo) -> 0.05
-    elif ',' in s:
-        s = s.replace(',', '.')
-    return float(s)
-
-def parse_smart_excel(df_sheet):
-    """
-    Membaca DataFrame Excel dan mencari pola AHSP secara dinamis.
-    Tidak peduli kolom ke berapa, yang penting urutannya logis.
-    """
+def parse_sda_complex(lines):
+    """Membaca format SDA yang rumit (Ada Koefisien)"""
     data_list = []
-    
-    # State
     current_data = {'kode': '', 'uraian': '', 'satuan': 'ls', 'tenaga': [], 'bahan': [], 'alat': []}
-    mode = None # tenaga / bahan / alat
+    mode = None 
     
-    # Ubah DF jadi list of list biar gampang di-loop
-    # Isi Na dengan string kosong
-    rows = df_sheet.fillna("").values.tolist()
-    
-    for row in rows:
-        # Bersihkan spasi di setiap sel
-        row = [str(cell).strip() for cell in row]
+    for line in lines:
+        # Pisahkan berdasarkan titik koma (CSV style)
+        parts = line.split(';')
+        parts = [p.strip().replace('"', '').replace('nan', '') for p in parts] # Bersihkan 'nan' dari Excel
         
-        # Gabungkan semua teks di baris ini untuk deteksi kata kunci
-        full_text_row = " ".join(row).upper()
+        if len(parts) < 2: continue
         
-        # --- 1. DETEKSI MODE (JUDUL KATEGORI) ---
-        if "TENAGA" in full_text_row and "JUMLAH" not in full_text_row: mode = 'tenaga'; continue
-        if "BAHAN" in full_text_row and "JUMLAH" not in full_text_row: mode = 'bahan'; continue
-        if ("ALAT" in full_text_row or "PERALATAN" in full_text_row) and "JUMLAH" not in full_text_row: mode = 'alat'; continue
-        
-        # --- 2. DETEKSI KODE & URAIAN PEKERJAAN (HEADER) ---
-        # Cari sel yang isinya pola kode (misal: 2.2.1.1)
-        # Dan sel di sebelahnya ada teks panjang
-        found_code = False
-        for i, cell in enumerate(row):
-            # Regex kode: Angka.Angka (Minimal 2 segmen, misal 2.1 atau A.2.1)
-            if re.match(r'^[A-Z0-9]+\.[\d\.]+$', cell) and len(cell) < 15:
-                # Cek sebelah kanannya apakah ada Uraian?
-                # Cari sel non-kosong berikutnya
-                uraian_text = ""
-                satuan_text = "ls" # Default
-                
-                for j in range(i+1, len(row)):
-                    if row[j]: 
-                        uraian_text = row[j]
-                        # Coba cari satuan di sel berikutnya lagi
-                        for k in range(j+1, len(row)):
-                            if row[k] and len(row[k]) < 10: # Asumsi satuan pendek
-                                satuan_text = row[k]
-                                break
-                        break
-                
-                if uraian_text and "ANALISA" not in uraian_text.upper():
-                    # SIMPAN DATA SEBELUMNYA
-                    if current_data['kode']:
-                        data_list.append(export_item(current_data))
-                    
-                    # RESET BARU
-                    current_data = {
-                        'kode': cell, 'uraian': uraian_text, 'satuan': satuan_text,
-                        'tenaga': [], 'bahan': [], 'alat': []
-                    }
-                    mode = None # Reset mode kalau ganti pekerjaan
-                    found_code = True
-                    break
-        
-        if found_code: continue
+        # Deteksi Kode (Kolom 0) -> Contoh: 3.13.1
+        if re.match(r'^\d+\.\d+', parts[0]) and len(parts[1]) > 3:
+            if current_data['kode']:
+                data_list.append(export_item(current_data))
+            
+            current_data = {
+                'kode': parts[0], 'uraian': parts[1], 'satuan': 'ls',
+                'tenaga': [], 'bahan': [], 'alat': []
+            }
+            mode = None
+            continue
 
-        # --- 3. DETEKSI KOEFISIEN (ISI RESEP) ---
-        if mode and current_data['kode']:
-            # Cari baris yang punya format: [Nama Item] ... [Angka Koefisien]
-            # Strategi: Cari sel teks (Nama) dan sel Angka (Koefisien)
-            
-            nama_item = ""
-            koefisien = ""
-            
-            # 1. Cari Nama Item (String panjang, bukan angka, bukan 'OH', bukan 'M3')
-            # Biasanya di kolom awal-awal yang ada isinya
-            col_idx_nama = -1
-            for i, cell in enumerate(row):
-                if cell and not is_number(cell) and len(cell) > 2 and cell.lower() not in ['oh', 'ls', 'bh', 'set', 'unit']:
-                    # Hindari kata-kata sampah
-                    if any(x in cell.upper() for x in ['NO', 'URAIAN', 'SAT', 'KOEF', 'JUMLAH']): continue
-                    nama_item = cell
-                    col_idx_nama = i
-                    break
-            
-            # 2. Cari Koefisien (Angka) SETELAH Nama Item
-            if nama_item and col_idx_nama != -1:
-                for j in range(col_idx_nama + 1, len(row)):
-                    cell = row[j]
-                    # Cek apakah angka valid
-                    if cell and is_number(cell):
-                        val = clean_decimal(cell)
-                        # Koefisien biasanya < 1000. Kalau > 1000 biasanya Harga.
-                        # Tapi semen beton bisa 300kg. Jadi kita ambil angka pertama yang ketemu setelah nama.
-                        if val > 0:
-                            koefisien = val
-                            break
-            
-            # 3. Simpan jika valid
-            if nama_item and koefisien:
-                entry = f"{nama_item} {koefisien}"
-                current_data[mode].append(entry)
-
-    # Simpan item terakhir
-    if current_data['kode']:
-        data_list.append(export_item(current_data))
+        # Deteksi Mode (Tenaga/Bahan/Alat)
+        col_str = "".join(parts[:2]).upper()
+        if "TENAGA" in col_str: mode = 'tenaga'; continue
+        if "BAHAN" in col_str: mode = 'bahan'; continue
+        if "ALAT" in col_str or "PERALATAN" in col_str: mode = 'alat'; continue
         
+        # Ambil Koefisien
+        if mode and len(parts) >= 4:
+            # Kolom 3 biasanya koefisien
+            clean_koef = parts[3].replace('.', '').replace(',', '.')
+            if clean_koef.replace('.', '', 1).isdigit() and float(clean_koef) > 0:
+                item_str = f"{parts[1]} {clean_koef}"
+                if mode == 'tenaga': current_data['tenaga'].append(item_str)
+                elif mode == 'bahan': current_data['bahan'].append(item_str)
+                elif mode == 'alat': current_data['alat'].append(item_str)
+
+    if current_data['kode']: data_list.append(export_item(current_data))
+    return data_list
+
+def parse_cipta_karya(lines):
+    """Membaca format Cipta Karya (Hanya Daftar Harga)"""
+    data_list = []
+    for line in lines:
+        parts = line.split(';')
+        parts = [p.strip().replace('"', '') for p in parts]
+        if len(parts) < 4: continue
+        
+        if re.match(r'^[A-Z0-9]+\.[0-9\.]+', parts[1]):
+            data_list.append({
+                'kode': parts[1], 'uraian': parts[2], 'satuan': parts[3],
+                'tenaga': '-', 'bahan': '-', 'alat': '-'
+            })
     return data_list
 
 def export_item(d):
@@ -147,58 +79,81 @@ def export_item(d):
     }
 
 # ==========================================
-# 2. UI UTAMA
+# 2. UI & HANDLING FILE
 # ==========================================
 
-uploaded_file = st.file_uploader("Upload File `data_rab.xlsx`", type=['xlsx', 'csv'])
+# Pilihan Mode
+mode_konversi = st.radio(
+    "Pilih Jenis File:",
+    ["1. Format SDA (Detail Analisa)", 
+     "2. Format Cipta Karya (Rekap Harga)"]
+)
+
+uploaded_file = st.file_uploader("Upload File (CSV atau Excel .xlsx)", type=['csv', 'xlsx'])
 
 if uploaded_file:
-    with st.spinner("🚀 Sedang memproses file 'Raksasa'... (Mohon bersabar)"):
+    with st.spinner("Sedang membongkar file..."):
         try:
-            all_data = []
+            all_lines = []
+            file_name = uploaded_file.name
             
-            if uploaded_file.name.endswith('.xlsx'):
+            # --- JIKA FILE EXCEL (.xlsx) ---
+            if file_name.endswith('.xlsx'):
+                st.info("📂 Terdeteksi file Excel. Sedang membaca seluruh Sheet...")
+                
+                # Baca Excel tanpa header (header=None) biar semua baris terbaca
                 xls = pd.ExcelFile(uploaded_file)
+                
                 total_sheets = len(xls.sheet_names)
                 my_bar = st.progress(0)
                 
                 for i, sheet_name in enumerate(xls.sheet_names):
-                    # Update progress
+                    # Update progress bar
                     my_bar.progress((i + 1) / total_sheets)
                     
-                    # Baca sheet (header=None biar kolom kosong terbaca)
-                    df_sheet = pd.read_excel(xls, sheet_name=sheet_name, header=None)
+                    # Baca sheet menjadi DataFrame
+                    df = pd.read_excel(xls, sheet_name=sheet_name, header=None)
                     
-                    # Parse Sheet Ini
-                    sheet_results = parse_smart_excel(df_sheet)
-                    all_data.extend(sheet_results)
+                    # Ubah setiap baris menjadi string yang dipisah titik koma (mirip CSV)
+                    # Contoh: "3.1;Galian;m3" -> "3.1;Galian;m3"
+                    sheet_lines = df.fillna('').astype(str).apply(lambda x: ';'.join(x), axis=1).tolist()
+                    all_lines.extend(sheet_lines)
                     
-            else:
-                # Kalau CSV
-                df = pd.read_csv(uploaded_file, header=None, sep=None, engine='python')
-                all_data = parse_smart_excel(df)
-
-            # Hasil Akhir
-            df_hasil = pd.DataFrame(all_data)
-            
-            if not df_hasil.empty:
-                st.success(f"✅ SUKSES BESAR! Berhasil menarik **{len(df_hasil)}** Analisa Pekerjaan!")
+                st.success(f"✅ Berhasil menggabungkan **{total_sheets} Sheet**!")
                 
-                with st.expander("🔍 Intip Hasil Data"):
+            # --- JIKA FILE CSV (.csv) ---
+            else:
+                content = uploaded_file.getvalue().decode('utf-8', errors='ignore')
+                all_lines = content.split('\n')
+
+            # --- PROSES KONVERSI ---
+            if "Format SDA" in mode_konversi:
+                hasil = parse_sda_complex(all_lines)
+                filename = "ahsp_sda_master.csv"
+            else:
+                hasil = parse_cipta_karya(all_lines)
+                filename = "ahsp_ciptakarya_master.csv"
+            
+            df_hasil = pd.DataFrame(hasil)
+            
+            # --- TAMPILKAN HASIL ---
+            if not df_hasil.empty:
+                st.success(f"🎉 SELESAI! Ditemukan **{len(df_hasil)}** Item Pekerjaan.")
+                
+                with st.expander("👁️ Cek Sampel Data"):
                     st.dataframe(df_hasil.head(50))
                 
                 # Download Button
-                csv_export = df_hasil.to_csv(index=False).encode('utf-8')
+                csv_data = df_hasil.to_csv(index=False).encode('utf-8')
                 st.download_button(
-                    label="⬇️ Download ahsp_ciptakarya_master.csv",
-                    data=csv_export,
-                    file_name="ahsp_ciptakarya_master.csv",
+                    label=f"⬇️ Download {filename}",
+                    data=csv_data,
+                    file_name=filename,
                     mime="text/csv",
                     type="primary"
                 )
-                st.info("Langkah Selanjutnya: Upload file ini ke GitHub folder `data/`.")
             else:
-                st.error("❌ Data tidak ditemukan. Coba cek format file Excelnya.")
+                st.error("❌ Data kosong. Pastikan format kolom Excel sesuai.")
                 
         except Exception as e:
-            st.error(f"Error: {e}")
+            st.error(f"Terjadi kesalahan: {e}")
