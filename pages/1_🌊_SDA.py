@@ -7,8 +7,6 @@ import re
 # CONFIG HALAMAN
 # ==============================
 st.set_page_config(page_title="Modul SDA", layout="wide")
-
-# Import Engine
 import sys
 sys.path.append('.')
 try:
@@ -18,7 +16,6 @@ except ModuleNotFoundError:
     st.stop()
 
 st.title("🌊 Modul Sumber Daya Air (SDA)")
-st.caption("Perhitungan AHSP Bidang SDA - Basis Data Terpusat")
 
 # ==============================
 # 1. LOAD DATABASE AHSP
@@ -36,7 +33,7 @@ def load_database():
             df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
             if "kode_ahsp" in df.columns:
                 return df
-        st.error("Tidak ada sheet yang valid (harus ada kolom 'kode_ahsp')")
+        st.error("Tidak ada sheet valid.")
         st.stop()
     except Exception as e:
         st.error(f"Error DB: {e}")
@@ -52,12 +49,11 @@ def clean_currency(value):
         if pd.isna(value): return 0.0
         if isinstance(value, (int, float)): return float(value)
         str_val = str(value).lower().replace("rp", "").strip()
-        # Logika: Titik ribuan, Koma desimal
         if "," in str_val and "." in str_val:
             str_val = str_val.replace(".", "").replace(",", ".")
-        elif "." in str_val: # 10.000 -> 10000
+        elif "." in str_val:
              str_val = str_val.replace(".", "")
-        elif "," in str_val: # 10,5 -> 10.5
+        elif "," in str_val:
              str_val = str_val.replace(",", ".")
         return float(str_val)
     except:
@@ -68,54 +64,39 @@ def load_shs_data(uploaded_file):
         df_shs = pd.read_excel(uploaded_file)
         df_shs.columns = [str(c).strip().lower() for c in df_shs.columns]
         
+        # Cari Kolom
         col_uraian = next((c for c in df_shs.columns if "nama" in c or "uraian" in c), None)
         col_harga = next((c for c in df_shs.columns if "harga" in c), None)
         
         if col_uraian and col_harga:
             df_shs['harga_clean'] = df_shs[col_harga].apply(clean_currency)
-            # Ambil yang harganya > 0 saja
             df_valid = df_shs[df_shs['harga_clean'] > 0]
             
-            # Buat Dictionary
+            # Buat Dictionary {nama_kecil: harga}
             price_dict = dict(zip(
                 df_valid[col_uraian].astype(str).str.lower().str.strip(), 
                 df_valid['harga_clean']
             ))
             return price_dict, len(price_dict)
-        else:
-            return {}, 0
-    except Exception:
         return {}, 0
+    except: return {}, 0
 
 # ==============================
-# 3. SIDEBAR: UPLOAD & SEARCH
+# 3. SIDEBAR: UPLOAD
 # ==============================
-st.sidebar.header("📥 Data Harga Satuan (SHS)")
-uploaded_shs = st.sidebar.file_uploader("Upload File Excel SHS", type=["xlsx"])
-
+st.sidebar.header("📥 Harga Satuan (SHS)")
+uploaded_shs = st.sidebar.file_uploader("Upload Excel SHS", type=["xlsx"])
 shs_prices = {}
+
 if uploaded_shs:
     shs_prices, count = load_shs_data(uploaded_shs)
     if count > 0:
-        st.sidebar.success(f"✅ {count} item harga terbaca!")
-        
-        # --- FITUR PENCARIAN BARU ---
-        with st.sidebar.expander("🔍 Cari Material di Excel"):
-            cari = st.text_input("Ketik nama (misal: Semen)", "")
-            if cari:
-                # Filter dictionary
-                hasil_cari = {k: v for k, v in shs_prices.items() if cari.lower() in k}
-                if hasil_cari:
-                    st.write("Ditemukan:", hasil_cari)
-                else:
-                    st.warning(f"Tidak ditemukan '{cari}' di Excel.")
-            else:
-                st.caption("Ketik untuk memastikan data masuk.")
+        st.sidebar.success(f"✅ {count} harga terbaca!")
     else:
-        st.sidebar.error("Gagal baca data.")
+        st.sidebar.error("Gagal membaca harga.")
 
 st.sidebar.markdown("---")
-st.sidebar.header("🛠️ Analisa Pekerjaan")
+st.sidebar.header("🛠️ Input Analisa")
 
 # Pilih Item
 kode_terpilih = st.sidebar.selectbox("Pilih Item Pekerjaan:", df["kode_ahsp"].astype(str).tolist())
@@ -145,43 +126,61 @@ koef_tenaga = smart_parse_resource(row.get('tenaga_detail', '-'))
 koef_bahan = smart_parse_resource(row.get('bahan_detail', '-'))
 koef_alat = smart_parse_resource(row.get('alat_detail', '-'))
 
+# --- FUNGSI MATCHING DENGAN DIAGNOSA ---
+def get_auto_price_debug(resource_name):
+    """Mengembalikan (Harga, Nama_di_Excel_yg_Cocok)"""
+    res_clean = resource_name.lower().split('(')[0].strip() # Ambil kata dasar
+    
+    # 1. Coba Exact Match di Dictionary
+    for shs_item, price in shs_prices.items():
+        shs_clean = shs_item.split('(')[0].strip()
+        
+        # Logika: "Semen" vs "Semen Portland"
+        if res_clean == shs_clean or res_clean in shs_clean or shs_clean in res_clean:
+            return float(price), shs_item # KETEMU!
+            
+    return 0.0, "❌ Tidak Ada"
+
+# --- GENERATE FORM INPUT & DIAGNOSTIC TABLE ---
 input_harga_tenaga = {}
 input_harga_bahan = {}
 input_harga_alat = {}
 
-# --- FUNGSI MATCHING (Cari Kecocokan) ---
-def get_auto_price(resource_name, default_val=0.0):
-    # Nama di DB: "Semen (PC)" -> "semen"
-    res_clean = resource_name.lower().split('(')[0].strip()
-    
-    # Cari di SHS
-    for shs_item, price in shs_prices.items():
-        shs_clean = shs_item.split('(')[0].strip()
-        
-        # Logika: Apakah "semen" ada di "semen portland"?
-        if res_clean in shs_clean or shs_clean in res_clean:
-            return float(price)
+# List untuk tabel diagnosa
+diagnosa_log = []
+
+def process_category(category_name, koef_dict, input_dict):
+    if koef_dict:
+        st.sidebar.subheader(category_name)
+        for nama, koef in koef_dict.items():
+            price, match_name = get_auto_price_debug(nama)
             
-    return default_val
+            # Masukkan ke Input
+            input_dict[nama] = st.sidebar.number_input(
+                f"{nama}", 
+                value=price, 
+                step=1000.0 if price == 0 else price/10,
+                format="%.0f"
+            )
+            
+            # Catat log diagnosa
+            status = "✅" if price > 0 else "❌"
+            diagnosa_log.append({
+                "Tipe": category_name.split(" ")[1], # Ambil kata kedua (Tenaga/Bahan)
+                "Database Minta": nama,
+                "Excel Punya": match_name,
+                "Harga": f"{price:,.0f}"
+            })
 
-# Form Input
-if koef_tenaga:
-    st.sidebar.subheader("👷 Upah Tenaga")
-    for nama, koef in koef_tenaga.items():
-        price = get_auto_price(nama, 0.0)
-        input_harga_tenaga[nama] = st.sidebar.number_input(f"Upah {nama}", value=price, step=5000.0)
+process_category("👷 Upah Tenaga", koef_tenaga, input_harga_tenaga)
+process_category("🧱 Harga Bahan", koef_bahan, input_harga_bahan)
+process_category("🚜 Sewa Alat", koef_alat, input_harga_alat)
 
-if koef_bahan:
-    st.sidebar.subheader("🧱 Harga Bahan")
-    for nama, koef in koef_bahan.items():
-        price = get_auto_price(nama, 0.0)
-        input_harga_bahan[nama] = st.sidebar.number_input(f"Harga {nama}", value=price, step=1000.0)
-
-if koef_alat:
-    st.sidebar.subheader("🚜 Sewa Alat")
-    for nama, koef in koef_alat.items():
-        price = get_auto_price(nama, 0.0)
-        input_harga_alat[nama] = st.sidebar.number_input(f"Sewa {nama}", value=price, step=10000.0)
+# --- TAMPILKAN TABEL DIAGNOSA (DEBUGGING) ---
+if uploaded_shs and diagnosa_log:
+    with st.sidebar.expander("🔍 Diagnosa Kecocokan Data", expanded=True):
+        st.caption("Tabel ini menunjukkan kenapa harga masuk/kosong:")
+        st.dataframe(pd.DataFrame(diagnosa_log), hide_index=True)
 
 # ==============================
 # 4. EKSEKUSI
