@@ -25,8 +25,18 @@ def load_data_ck():
         return pd.DataFrame()
         
     try:
+        # Baca CSV
         df = pd.read_csv(path, sep=None, engine='python')
         df.columns = [c.strip().lower() for c in df.columns]
+        
+        # --- PERBAIKAN ERROR DI SINI ---
+        # Hapus baris yang 'uraian'-nya kosong (NaN) agar tidak error di selectbox
+        df = df.dropna(subset=['uraian'])
+        
+        # Pastikan kolom kode dan uraian jadi string (biar aman digabung)
+        df['kode'] = df['kode'].astype(str)
+        df['uraian'] = df['uraian'].astype(str)
+        
         return df
     except:
         return pd.DataFrame()
@@ -45,57 +55,60 @@ if df_ck.empty:
 
 # Dropdown Pilihan (Searchable)
 # Gabungkan Kode + Uraian biar gampang dicari
-pilihan_label = df_ck['kode'].astype(str) + " | " + df_ck['uraian']
+pilihan_label = df_ck['kode'] + " | " + df_ck['uraian']
 pilihan = st.sidebar.selectbox("Cari Pekerjaan:", options=pilihan_label)
 
 # Ambil Data Baris Terpilih
 kode_terpilih = pilihan.split(" | ")[0]
-row = df_ck[df_ck['kode'] == kode_terpilih].iloc[0]
+# Filter dataframes aman
+row_df = df_ck[df_ck['kode'] == kode_terpilih]
 
-# Input Volume
-st.sidebar.markdown("---")
-vol = st.sidebar.number_input(f"Volume ({row['satuan']})", value=1.0, min_value=0.01)
-
-# ==============================
-# 3. ANALISA HARGA (SIMPLE MODE)
-# ==============================
-st.subheader(f"Analisa: {row['uraian']}")
-
-# Coba cari harga di kolom 'tenaga' atau 'bahan' kalau-kalau ada angka terselip
-# Tapi biasanya file CK yang tadi kosong, jadi kita input manual harganya.
-st.info("ℹ️ Mode Harga Jadi: Masukkan harga satuan final sesuai kontrak/standar daerah.")
-
-col1, col2 = st.columns([1, 2])
-
-with col1:
-    # Input Harga Satuan Manual (Karena di CSV tadi tidak ada kolom harga numeric)
-    # Default 0, User harus isi sesuai standar harga setempat
-    harga_satuan = st.number_input(
-        "Harga Satuan (Rp)", 
-        value=0.0, 
-        step=10000.0, 
-        help="Masukkan harga satuan jadi per m2/unit"
-    )
-
-with col2:
-    # Tampilkan Total
-    total_harga = harga_satuan * vol
-    st.metric("TOTAL HARGA ITEM", f"Rp {total_harga:,.0f}")
+if not row_df.empty:
+    row = row_df.iloc[0]
     
-    # Tombol Tambah
-    if st.button("➕ Tambah ke RAB Gedung", type="primary"):
-        if total_harga > 0:
-            st.session_state.rab_ck.append({
-                "Kode": row['kode'],
-                "Uraian": row['uraian'],
-                "Volume": vol,
-                "Satuan": row['satuan'],
-                "Harga Satuan": harga_satuan,
-                "Total": total_harga
-            })
-            st.success("Item berhasil ditambahkan! 👇")
-        else:
-            st.warning("Harga masih 0. Mohon isi harga satuan dulu.")
+    # Input Volume
+    st.sidebar.markdown("---")
+    vol = st.sidebar.number_input(f"Volume ({row['satuan']})", value=1.0, min_value=0.01)
+
+    # ==============================
+    # 3. ANALISA HARGA (SIMPLE MODE)
+    # ==============================
+    st.subheader(f"Analisa: {row['uraian']}")
+
+    st.info("ℹ️ Mode Harga Jadi: Masukkan harga satuan final sesuai kontrak/standar daerah.")
+
+    col1, col2 = st.columns([1, 2])
+
+    with col1:
+        # Input Harga Satuan Manual
+        harga_satuan = st.number_input(
+            "Harga Satuan (Rp)", 
+            value=0.0, 
+            step=10000.0, 
+            help="Masukkan harga satuan jadi per m2/unit"
+        )
+
+    with col2:
+        # Tampilkan Total
+        total_harga = harga_satuan * vol
+        st.metric("TOTAL HARGA ITEM", f"Rp {total_harga:,.0f}")
+        
+        # Tombol Tambah
+        if st.button("➕ Tambah ke RAB Gedung", type="primary"):
+            if total_harga > 0:
+                st.session_state.rab_ck.append({
+                    "Kode": row['kode'],
+                    "Uraian": row['uraian'],
+                    "Volume": vol,
+                    "Satuan": row['satuan'],
+                    "Harga Satuan": harga_satuan,
+                    "Total": total_harga
+                })
+                st.success("Item berhasil ditambahkan! 👇")
+            else:
+                st.warning("Harga masih 0. Mohon isi harga satuan dulu.")
+else:
+    st.error("Data item tidak ditemukan.")
 
 # ==============================
 # 4. TABEL REKAP RAB (BOQ)
