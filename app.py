@@ -18,94 +18,56 @@ except ModuleNotFoundError:
     st.stop()
 
 # ==============================
-# 1. LOAD DATABASE (VERSI PINTAR/ROBUST)
+# 1. LOAD DATABASE (VERSI NORMAL - FILE SUDAH RAPI)
 # ==============================
 @st.cache_data
 def load_database():
     path = "data/ahsp_sda_2025_tanah_manual_core_template.xlsx"
     
-    # Cek keberadaan file
     if not os.path.exists(path):
-        st.warning(f"Database {path} belum ada. Mode Demo Aktif.")
-        # Mock Data Lengkap untuk Demo
-        return pd.DataFrame({
-            "kode_ahsp": ["T.01.Contoh", "B.05.Beton"],
-            "uraian_pekerjaan": ["Galian Tanah Manual", "Cor Beton K-175"],
-            "satuan": ["m3", "m3"],
-            "metode": ["Manual", "Mekanis"],
-            "tenaga_detail": ["Pekerja (L.01) 0.750 OH; Mandor (L.04) 0.025 OH", "Pekerja 1.0 OH; Tukang 0.5 OH"],
-            "bahan_detail": ["-", "Semen Portland 320 kg; Pasir Beton 0.76 m3; Kerikil 1.0 m3"],
-            "alat_detail": ["-", "Concrete Mixer 0.25 Sewa-Hari"],
-            "catatan": ["-", "-"]
-        })
-    
-    # --- LOGIKA AUTO-FIX HEADER EXCEL ---
-    try:
-        # Percobaan 1: Baca normal (Header di baris 1)
-        df = pd.read_excel(path, sheet_name=0)
-        
-        # Bersihkan nama kolom (hapus spasi, ubah ke huruf kecil)
-        df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
-
-        # Cek apakah kolom kunci 'kode_ahsp' ditemukan?
-        if "kode_ahsp" not in df.columns:
-            # Percobaan 2: Mungkin Header ada di Baris 2? (header=1)
-            # Ini mengatasi masalah file Excel Anda yang baris 1-nya berisi kalimat chat
-            df = pd.read_excel(path, sheet_name=0, header=1)
-            df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
-
-        # Cek Final
-        if "kode_ahsp" not in df.columns:
-            st.error("🚨 Gagal membaca Database! Sistem tidak menemukan kolom 'kode_ahsp'.")
-            st.write("Kolom yang terbaca:", df.columns.tolist())
-            st.warning("Tips: Pastikan judul kolom ada di Baris 1 atau Baris 2 Excel.")
-            st.stop()
-
-        return df
-
-    except Exception as e:
-        st.error(f"Terjadi kesalahan saat membaca Excel: {e}")
+        st.error("File database tidak ditemukan.")
         st.stop()
+    
+    # BACA EXCEL SECARA NORMAL (Header di Baris 1)
+    # sheet_name=0 artinya ambil sheet paling pertama
+    df = pd.read_excel(path, sheet_name=0)
+    
+    # Bersihkan nama kolom (jaga-jaga kalau ada spasi)
+    df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
+    
+    # Validasi
+    if "kode_ahsp" not in df.columns:
+        st.error("🚨 Kolom 'kode_ahsp' tidak ditemukan.")
+        st.write("Kolom yang terbaca:", df.columns.tolist())
+        st.stop()
+        
+    return df
 
 df = load_database()
 
 # ==============================
-# 2. FUNGSI PARSING PINTAR (REGEX)
+# 2. FUNGSI PARSING (KOEFISIEN)
 # ==============================
 def smart_parse_resource(text_string):
-    """
-    Mengubah teks "Semen 50 kg; Pasir 0.5 m3" menjadi Dictionary.
-    """
     resources = {}
-    # Handle NaN / Float / Empty
     if pd.isna(text_string) or str(text_string).strip() in ["-", "", "nan"]:
         return resources
     
-    # Pecah berdasarkan titik koma (;)
     parts = str(text_string).split(';')
-    
     for part in parts:
         part = part.strip()
         if not part: continue
+        # Regex cari Nama & Angka
+        match = re.search(r'^(.*?)\s+([\d\.,]+)\s*([a-zA-Z]*)$', part)
+        if not match: match = re.search(r'^(.*?)\s+([\d\.]+)', part)
         
-        # Regex: Cari angka (integer/desimal) di akhir atau tengah string
-        # Pola: Ambil nama (Group 1) dan Angka (Group 2)
-        match = re.search(r'^(.*?)\s+([\d\.,]+)\s*([a-zA-Z]*)$', part) 
-        # Note: Regex disederhanakan untuk menangkap angka desimal lebih fleksibel
-        
-        # Fallback regex jika yang diatas gagal (misal angka di tengah)
-        if not match:
-             match = re.search(r'^(.*?)\s+([\d\.]+)', part)
-
         if match:
             nama = match.group(1).strip()
-            angka_str = match.group(2).replace(',', '.') # Ubah koma jadi titik jika ada
             try:
-                angka = float(angka_str)
+                # Ganti koma jadi titik biar bisa dihitung
+                angka = float(match.group(2).replace(',', '.'))
                 resources[nama] = angka
-            except ValueError:
-                pass
-            
+            except: pass
     return resources
 
 # ==============================
@@ -117,17 +79,16 @@ if df.empty:
     st.error("Database Kosong!")
     st.stop()
 
-# Dropdown Pilih Item
+# Dropdown
 kode_terpilih = st.sidebar.selectbox("Pilih Kode AHSP:", df["kode_ahsp"].astype(str).tolist())
 row = df[df["kode_ahsp"] == kode_terpilih].iloc[0]
 
-# Tampilkan Info Item
+# Info Item
 st.info(f"**{row['uraian_pekerjaan']}**")
 st.caption(f"Satuan: {row['satuan']} | Metode: {row['metode']}")
+volume = st.number_input(f"Volume ({row['satuan']})", value=1.0, step=0.1)
 
-volume = st.number_input(f"Volume Pekerjaan ({row['satuan']})", value=1.0, step=0.1)
-
-# --- AUTO-GENERATE INPUT FORM ---
+# Parsing Koefisien
 koef_tenaga = smart_parse_resource(row.get('tenaga_detail', '-'))
 koef_bahan = smart_parse_resource(row.get('bahan_detail', '-'))
 koef_alat = smart_parse_resource(row.get('alat_detail', '-'))
@@ -136,7 +97,7 @@ input_harga_tenaga = {}
 input_harga_bahan = {}
 input_harga_alat = {}
 
-# Form Input Dinamis
+# Form Input Harga
 if koef_tenaga:
     st.sidebar.subheader("👷 Upah Tenaga")
     for nama, koef in koef_tenaga.items():
@@ -154,9 +115,9 @@ if koef_alat:
         input_harga_alat[nama] = st.sidebar.number_input(f"Sewa {nama}", value=0.0, step=10000.0)
 
 # ==============================
-# 4. TOMBOL EKSEKUSI
+# 4. EKSEKUSI & HASIL
 # ==============================
-if st.button("🚀 Hitung RAB Item Ini", type="primary"):
+if st.button("🚀 Hitung RAB", type="primary"):
     hasil = sda_engine.hitung_rab(
         kode_ahsp=kode_terpilih,
         uraian_pekerjaan=row['uraian_pekerjaan'],
@@ -167,14 +128,10 @@ if st.button("🚀 Hitung RAB Item Ini", type="primary"):
         harga_alat=input_harga_alat, koefisien_alat=koef_alat
     )
     
-    if "boq" not in st.session_state:
-        st.session_state.boq = []
+    if "boq" not in st.session_state: st.session_state.boq = []
     st.session_state.boq.append(hasil)
-    st.success("Item berhasil masuk keranjang BOQ!")
+    st.success("Masuk BOQ!")
 
-# ==============================
-# 5. HASIL & REKAP (TABLE)
-# ==============================
 st.divider()
 st.subheader("📋 Bill of Quantities (BOQ)")
 
@@ -188,26 +145,16 @@ if "boq" in st.session_state and st.session_state.boq:
             "hsp_bahan": st.column_config.NumberColumn("Bahan", format="Rp %.0f"),
             "hsp_alat": st.column_config.NumberColumn("Alat", format="Rp %.0f"),
             "harga_satuan": st.column_config.NumberColumn("HSP", format="Rp %.0f"),
-            "total": st.column_config.NumberColumn("Total Harga", format="Rp %.0f"),
+            "total": st.column_config.NumberColumn("Total", format="Rp %.0f"),
         },
         use_container_width=True
     )
     
-    col1, col2, col3, col4 = st.columns(4)
-    # Hitung total kali volume (karena di dataframe data satuan, kita perlu total harga)
     grand_total = boq_df['total'].sum()
+    st.metric("GRAND TOTAL RAB", f"Rp {grand_total:,.0f}")
     
-    col1.metric("Total Upah", f"Rp {boq_df['hsp_tenaga'].dot(boq_df['volume']):,.0f}")
-    col2.metric("Total Bahan", f"Rp {boq_df['hsp_bahan'].dot(boq_df['volume']):,.0f}")
-    col3.metric("Total Alat", f"Rp {boq_df['hsp_alat'].dot(boq_df['volume']):,.0f}")
-    col4.metric("GRAND TOTAL", f"Rp {grand_total:,.0f}")
-
-    if st.button("Hapus Semua Data"):
+    if st.button("Hapus Semua"):
         st.session_state.boq = []
         st.rerun()
 else:
-    st.info("Belum ada item pekerjaan yang dihitung.")
-
-# Debugger (Opsional)
-# with st.expander("Lihat Data Mentah"):
-#     st.write(row.to_dict())
+    st.info("Belum ada data.")
