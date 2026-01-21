@@ -18,29 +18,39 @@ except ModuleNotFoundError:
     st.stop()
 
 # ==============================
-# 1. LOAD DATABASE
+# 1. LOAD DATABASE (VERSI ANTI-ERROR)
 # ==============================
 @st.cache_data
 def load_database():
-    # Pastikan nama file sesuai dengan yang di GitHub
     path = "data/ahsp_sda_2025_tanah_manual_core_template.xlsx"
     
     if not os.path.exists(path):
-        st.warning(f"Database {path} belum ada. Mode Demo Aktif.")
-        # Mock Data Lengkap untuk Demo
+        st.warning(f"File database belum ada. Menggunakan data dummy.")
+        # Data dummy darurat
         return pd.DataFrame({
-            "kode_ahsp": ["T.01.Contoh", "B.05.Beton"],
-            "uraian_pekerjaan": ["Galian Tanah Manual", "Cor Beton K-175"],
-            "satuan": ["m3", "m3"],
-            "metode": ["Manual", "Mekanis"],
-            "tenaga_detail": ["Pekerja (L.01) 0.750 OH; Mandor (L.04) 0.025 OH", "Pekerja 1.0 OH; Tukang 0.5 OH"],
-            "bahan_detail": ["-", "Semen Portland 320 kg; Pasir Beton 0.76 m3; Kerikil 1.0 m3"],
-            "alat_detail": ["-", "Concrete Mixer 0.25 Sewa-Hari"],
-            "catatan": ["-", "-"]
+            "kode_ahsp": ["T.01.Contoh"],
+            "uraian_pekerjaan": ["Galian Tanah Manual"],
+            "satuan": ["m3"],
+            "metode": ["Manual"],
+            "tenaga_detail": ["Pekerja (L.01) 0.750 OH"],
+            "bahan_detail": ["-"],
+            "alat_detail": ["-"]
         })
     
-    return pd.read_excel(path, sheet_name=0)
-
+    # BACA EXCEL (Sheet pertama)
+    df = pd.read_excel(path, sheet_name=0)
+    
+    # --- AUTO-FIX COLUMN NAMES ---
+    # 1. Ubah semua nama kolom jadi huruf kecil & hapus spasi depan/belakang
+    df.columns = [str(c).lower().strip().replace(" ", "_") for c in df.columns]
+    
+    # 2. Cek apakah kolom kunci ada
+    if "kode_ahsp" not in df.columns:
+        st.error("🚨 ERROR: Kolom 'kode_ahsp' tidak ditemukan di Excel!")
+        st.write("Nama kolom yang terbaca oleh sistem:", df.columns.tolist())
+        st.stop() # Berhenti biar user bisa baca errornya
+        
+    return df
 df = load_database()
 
 # ==============================
@@ -186,4 +196,5 @@ else:
 # Debugger untuk melihat Koefisien mentah (Bisa dihapus nanti)
 with st.expander("🔍 Lihat Detail Database (Debug)"):
     st.json(row.to_dict())
+
 
