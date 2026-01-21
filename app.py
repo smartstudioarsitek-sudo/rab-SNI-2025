@@ -39,7 +39,7 @@ def load_database():
             "catatan": ["-", "-"]
         })
     
-    return pd.read_excel(path, sheet_name="ahsp_tanah_manual_core")
+    return pd.read_excel(path, sheet_name=0)
 
 df = load_database()
 
@@ -186,3 +186,4 @@ else:
 # Debugger untuk melihat Koefisien mentah (Bisa dihapus nanti)
 with st.expander("🔍 Lihat Detail Database (Debug)"):
     st.json(row.to_dict())
+
