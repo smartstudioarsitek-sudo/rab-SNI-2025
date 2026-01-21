@@ -126,20 +126,33 @@ input_harga_tenaga = {}
 input_harga_bahan = {}
 input_harga_alat = {}
 
-# --- FUNGSI AUTO-FILL HARGA ---
+# --- FUNGSI AUTO-FILL HARGA (UPDATED) ---
 def get_auto_price(resource_name, default_val=0.0):
-    # Coba cari di SHS (pakai huruf kecil semua biar cocok)
-    name_key = resource_name.lower().strip()
-    
-    # Cari yang mengandung kata kuncinya (Partial Match)
-    # Misal di DB "Semen (PC)", di SHS "Semen". Kita coba cocokkan.
-    if name_key in shs_prices:
-        return float(shs_prices[name_key])
-    
-    # Kalau exact match gak ketemu, cari manual di dict
-    for k, v in shs_prices.items():
-        if k in name_key or name_key in k: # Saling mencocokkan sebagian kata
-            return float(v)
+    # 1. Cleaning Nama Resource dari Database (misal: "Semen (PC)" -> "semen")
+    # Kita ambil kata pertamanya saja sebagai kunci pencarian utama
+    res_clean = resource_name.lower().strip()
+    res_keyword = res_clean.split('(')[0].strip() # Ambil kata sebelum kurung
+
+    # 2. Coba cari EXACT MATCH dulu (Prioritas Utama)
+    if res_clean in shs_prices:
+        return float(shs_prices[res_clean])
+
+    # 3. Coba cari PARTIAL MATCH (Pencarian Pintar)
+    # Loop semua item di SHS
+    for shs_item, price in shs_prices.items():
+        shs_clean = shs_item.lower().strip()
+        
+        # Cek apakah keyword ada di dalam item SHS
+        # Contoh: resource="Pasir Beton", shs="Pasir". Cocok?
+        # Atau: resource="Semen", shs="Semen (PC)". Cocok?
+        
+        # Jika nama resource ada di SHS (Contoh: 'Semen' ada di 'Semen (PC)')
+        if res_keyword in shs_clean: 
+            return float(price)
+            
+        # Jika nama SHS ada di Resource (Contoh: 'Pasir' ada di 'Pasir Beton')
+        if shs_clean in res_clean:
+            return float(price)
             
     return default_val
 
@@ -193,3 +206,4 @@ if "boq" in st.session_state and st.session_state.boq:
         st.rerun()
 else:
     st.info("Belum ada data.")
+
