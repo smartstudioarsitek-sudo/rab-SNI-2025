@@ -4,103 +4,120 @@ import os
 import re
 
 # ==============================
-# 1. CONFIG & HEADER (Wajib Paling Atas)
+# CONFIG HALAMAN
 # ==============================
-st.set_page_config(page_title="JIAT Smart Studio", layout="wide")
-st.title("JIAT Smart Studio – Super App Konstruksi")
-st.caption("Engine: SDA + Cipta Karya + Bina Marga | Validasi AHSP 2025")
+st.set_page_config(page_title="Modul SDA", layout="wide")
 
-# Import Engine
+# Import Engine (Pastikan folder engine ada di root directory)
+import sys
+sys.path.append('.') # Trik agar folder engine terbaca dari subfolder pages
 try:
     from engine import sda_engine
 except ModuleNotFoundError:
-    st.error("🚨 Modul 'engine' tidak ditemukan. Pastikan folder engine dan file sda_engine.py ada.")
+    st.error("🚨 Modul 'engine' tidak ditemukan. Pastikan struktur folder benar.")
     st.stop()
 
+st.title("🌊 Modul Sumber Daya Air (SDA)")
+st.caption("Perhitungan AHSP Bidang SDA - Basis Data Terpusat")
+
 # ==============================
-# 2. LOAD DATABASE (VERSI AUTO-SEARCH SHEET)
+# 1. LOAD DATABASE AHSP (Server)
 # ==============================
 @st.cache_data
 def load_database():
+    # Perhatikan path: naik satu folder (..) lalu masuk data
     path = "data/ahsp_sda_2025_tanah_manual_core_template.xlsx"
     
     if not os.path.exists(path):
-        st.error(f"File database tidak ditemukan di: {path}")
+        st.error(f"Database tidak ditemukan di: {path}")
         st.stop()
-    
+        
     try:
-        # Buka File Excel tanpa memuat isinya dulu untuk cek daftar sheet
         xls = pd.ExcelFile(path)
-        sheet_names = xls.sheet_names
-        
-        # Loop untuk mencari sheet mana yang punya kolom 'kode_ahsp'
-        for sheet in sheet_names:
+        for sheet in xls.sheet_names:
             df = pd.read_excel(path, sheet_name=sheet)
-            
-            # Bersihkan nama kolom (hapus spasi, huruf kecil)
             df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
-            
-            # Cek apakah ini sheet yang benar?
             if "kode_ahsp" in df.columns:
-                return df # Ketemu! Kembalikan data ini.
-        
-        # Jika loop selesai tapi tidak ketemu
-        st.error("🚨 Gagal menemukan data! Tidak ada sheet yang memiliki kolom 'kode_ahsp'.")
-        st.write("Sheet yang diperiksa:", sheet_names)
+                return df
+        st.error("Tidak ada sheet yang valid (harus ada kolom 'kode_ahsp')")
         st.stop()
-
     except Exception as e:
-        st.error(f"Error membaca Excel: {e}")
+        st.error(f"Error DB: {e}")
         st.stop()
 
 df = load_database()
 
 # ==============================
-# 3. FUNGSI PARSING (KOEFISIEN)
+# 2. LOAD HARGA SATUAN (SHS) - FITUR BARU 🌟
 # ==============================
+# Fungsi untuk membaca file Excel SHS yang diupload user
+def load_shs_data(uploaded_file):
+    try:
+        df_shs = pd.read_excel(uploaded_file)
+        # Standarisasi nama kolom biar tidak error
+        df_shs.columns = [str(c).strip().lower() for c in df_shs.columns]
+        
+        # Cari kolom yang mirip "uraian" dan "harga"
+        col_uraian = next((c for c in df_shs.columns if "uraian" in c or "nama" in c), None)
+        col_harga = next((c for c in df_shs.columns if "harga" in c), None)
+        
+        if col_uraian and col_harga:
+            # Buat Dictionary: {"Semen": 1500, "Pasir": 200000}
+            # Kita bersihkan nama resource (huruf kecil) agar pencarian lebih akurat
+            price_dict = dict(zip(
+                df_shs[col_uraian].astype(str).str.lower().str.strip(), 
+                df_shs[col_harga]
+            ))
+            return price_dict, len(price_dict)
+        else:
+            return {}, 0
+    except Exception:
+        return {}, 0
+
+# ==============================
+# 3. SIDEBAR: UPLOAD & INPUT
+# ==============================
+st.sidebar.header("📥 Data Harga Satuan (SHS)")
+uploaded_shs = st.sidebar.file_uploader("Upload File Excel SHS", type=["xlsx"])
+
+shs_prices = {}
+if uploaded_shs:
+    shs_prices, count = load_shs_data(uploaded_shs)
+    if count > 0:
+        st.sidebar.success(f"✅ {count} harga berhasil dimuat!")
+    else:
+        st.sidebar.warning("⚠️ Gagal membaca harga. Pastikan ada kolom 'Uraian' dan 'Harga'.")
+
+st.sidebar.markdown("---")
+st.sidebar.header("🛠️ Analisa Pekerjaan")
+
+# Pilih Kode
+kode_terpilih = st.sidebar.selectbox("Pilih Item Pekerjaan:", df["kode_ahsp"].astype(str).tolist())
+row = df[df["kode_ahsp"] == kode_terpilih].iloc[0]
+
+# Info Item
+st.info(f"**{row['uraian_pekerjaan']}**")
+st.caption(f"Satuan: {row['satuan']} | Metode: {row['metode']}")
+volume = st.number_input(f"Volume ({row['satuan']})", value=1.0, step=0.1)
+
+# Helper Parsing
 def smart_parse_resource(text_string):
     resources = {}
     if pd.isna(text_string) or str(text_string).strip() in ["-", "", "nan"]:
         return resources
-    
-    # Pecah string berdasarkan titik koma
     parts = str(text_string).split(';')
     for part in parts:
-        part = part.strip()
-        if not part: continue
-        
-        # Regex untuk menangkap Nama & Angka (Flexible)
-        match = re.search(r'^(.*?)\s+([\d\.,]+)\s*([a-zA-Z]*)$', part)
-        if not match: match = re.search(r'^(.*?)\s+([\d\.]+)', part)
-        
+        match = re.search(r'^(.*?)\s+([\d\.,]+)\s*([a-zA-Z]*)$', part.strip())
+        if not match: match = re.search(r'^(.*?)\s+([\d\.]+)', part.strip())
         if match:
-            nama = match.group(1).strip()
             try:
-                # Ubah koma jadi titik biar bisa dihitung desimal
+                nama = match.group(1).strip()
                 angka = float(match.group(2).replace(',', '.'))
                 resources[nama] = angka
             except: pass
     return resources
 
-# ==============================
-# 4. INTERFACE (SIDEBAR)
-# ==============================
-st.sidebar.header("🛠️ Input Analisa")
-
-if df.empty:
-    st.error("Database Kosong!")
-    st.stop()
-
-# Dropdown Pilihan
-kode_terpilih = st.sidebar.selectbox("Pilih Kode AHSP:", df["kode_ahsp"].astype(str).tolist())
-row = df[df["kode_ahsp"] == kode_terpilih].iloc[0]
-
-# Tampilkan Info Item
-st.info(f"**{row['uraian_pekerjaan']}**")
-st.caption(f"Satuan: {row['satuan']} | Metode: {row['metode']}")
-volume = st.number_input(f"Volume Pekerjaan ({row['satuan']})", value=1.0, step=0.1)
-
-# Parsing Koefisien Otomatis
+# Parsing Data
 koef_tenaga = smart_parse_resource(row.get('tenaga_detail', '-'))
 koef_bahan = smart_parse_resource(row.get('bahan_detail', '-'))
 koef_alat = smart_parse_resource(row.get('alat_detail', '-'))
@@ -109,25 +126,44 @@ input_harga_tenaga = {}
 input_harga_bahan = {}
 input_harga_alat = {}
 
-# --- Form Input Harga (Dinamis) ---
+# --- FUNGSI AUTO-FILL HARGA ---
+def get_auto_price(resource_name, default_val=0.0):
+    # Coba cari di SHS (pakai huruf kecil semua biar cocok)
+    name_key = resource_name.lower().strip()
+    
+    # Cari yang mengandung kata kuncinya (Partial Match)
+    # Misal di DB "Semen (PC)", di SHS "Semen". Kita coba cocokkan.
+    if name_key in shs_prices:
+        return float(shs_prices[name_key])
+    
+    # Kalau exact match gak ketemu, cari manual di dict
+    for k, v in shs_prices.items():
+        if k in name_key or name_key in k: # Saling mencocokkan sebagian kata
+            return float(v)
+            
+    return default_val
+
+# Form Input (Otomatis Terisi jika SHS diupload)
 if koef_tenaga:
     st.sidebar.subheader("👷 Upah Tenaga")
     for nama, koef in koef_tenaga.items():
-        val = 150000.0 if "Mandor" in nama or "Tukang" in nama else 120000.0
-        input_harga_tenaga[nama] = st.sidebar.number_input(f"Upah {nama}", value=val, step=5000.0)
+        default_price = get_auto_price(nama, 120000.0) # Default kalau gak ketemu
+        input_harga_tenaga[nama] = st.sidebar.number_input(f"Upah {nama}", value=default_price, step=5000.0)
 
 if koef_bahan:
     st.sidebar.subheader("🧱 Harga Bahan")
     for nama, koef in koef_bahan.items():
-        input_harga_bahan[nama] = st.sidebar.number_input(f"Harga {nama}", value=0.0, step=1000.0)
+        default_price = get_auto_price(nama, 0.0)
+        input_harga_bahan[nama] = st.sidebar.number_input(f"Harga {nama}", value=default_price, step=1000.0)
 
 if koef_alat:
     st.sidebar.subheader("🚜 Sewa Alat")
     for nama, koef in koef_alat.items():
-        input_harga_alat[nama] = st.sidebar.number_input(f"Sewa {nama}", value=0.0, step=10000.0)
+        default_price = get_auto_price(nama, 0.0)
+        input_harga_alat[nama] = st.sidebar.number_input(f"Sewa {nama}", value=default_price, step=10000.0)
 
 # ==============================
-# 5. EKSEKUSI & HASIL
+# 4. EKSEKUSI
 # ==============================
 if st.button("🚀 Hitung RAB Item Ini", type="primary"):
     hasil = sda_engine.hitung_rab(
@@ -142,34 +178,18 @@ if st.button("🚀 Hitung RAB Item Ini", type="primary"):
     
     if "boq" not in st.session_state: st.session_state.boq = []
     st.session_state.boq.append(hasil)
-    st.success("✅ Item berhasil masuk keranjang BOQ!")
+    st.success("Masuk BOQ!")
 
-# Tampilkan Tabel BOQ
 st.divider()
 st.subheader("📋 Bill of Quantities (BOQ)")
 
 if "boq" in st.session_state and st.session_state.boq:
     boq_df = pd.DataFrame(st.session_state.boq)
+    st.dataframe(boq_df, use_container_width=True)
+    st.metric("GRAND TOTAL", f"Rp {boq_df['total'].sum():,.0f}")
     
-    # Tampilkan Tabel Rinci
-    st.dataframe(
-        boq_df[["kode_ahsp", "uraian", "volume", "satuan", "hsp_tenaga", "hsp_bahan", "hsp_alat", "harga_satuan", "total"]],
-        column_config={
-            "hsp_tenaga": st.column_config.NumberColumn("Upah", format="Rp %.0f"),
-            "hsp_bahan": st.column_config.NumberColumn("Bahan", format="Rp %.0f"),
-            "hsp_alat": st.column_config.NumberColumn("Alat", format="Rp %.0f"),
-            "harga_satuan": st.column_config.NumberColumn("HSP", format="Rp %.0f"),
-            "total": st.column_config.NumberColumn("Total", format="Rp %.0f"),
-        },
-        use_container_width=True
-    )
-    
-    # Tampilkan Grand Total
-    grand_total = boq_df['total'].sum()
-    st.metric("GRAND TOTAL RAB", f"Rp {grand_total:,.0f}")
-    
-    if st.button("Hapus Semua Data"):
+    if st.button("Reset"):
         st.session_state.boq = []
         st.rerun()
 else:
-    st.info("Belum ada item pekerjaan yang dihitung. Silakan pilih item di menu kiri.")
+    st.info("Belum ada data.")
