@@ -14,55 +14,73 @@ except:
     st.error("Engine tidak ditemukan.")
     st.stop()
 
-st.title("🌊 Modul SDA (Versi Ringan CSV)")
-st.caption("Anti-Ribet: Upload CSV Database & CSV Harga")
+st.title("🌊 Modul SDA (CSV Mode)")
+st.caption("Solusi Akhir: Upload CSV Database & CSV Harga")
+
+# ==========================================
+# FUNGSI BACA CSV PINTAR (Auto-Detect Separator)
+# ==========================================
+def smart_read_csv(uploaded_file):
+    try:
+        # Coba baca pakai KOMA (Default)
+        df = pd.read_csv(uploaded_file)
+        
+        # Kalau kolomnya cuma 1 (berarti gagal pisah), coba pakai TITIK KOMA
+        if len(df.columns) < 2:
+            uploaded_file.seek(0) # Reset file pointer
+            df = pd.read_csv(uploaded_file, sep=';')
+            
+        # Bersihkan nama kolom (huruf kecil, hapus spasi)
+        df.columns = [str(c).strip().lower() for c in df.columns]
+        return df, None
+    except Exception as e:
+        return None, str(e)
 
 # ==========================================
 # 1. SIDEBAR: UPLOAD FILE
 # ==========================================
-st.sidebar.header("📂 1. Upload Database")
-
-# A. Upload AHSP (Resep)
+st.sidebar.header("📂 1. Upload Database AHSP")
 file_ahsp = st.sidebar.file_uploader("Upload ahsp.csv", type=["csv"])
 df_ahsp = pd.DataFrame()
 
 if file_ahsp:
-    try:
-        df_ahsp = pd.read_csv(file_ahsp)
-        # Bersihkan nama kolom
-        df_ahsp.columns = [c.strip().lower() for c in df_ahsp.columns]
-        st.sidebar.success(f"✅ {len(df_ahsp)} Item AHSP dimuat")
-    except Exception as e:
-        st.sidebar.error(f"Error CSV: {e}")
+    df, err = smart_read_csv(file_ahsp)
+    if err:
+        st.sidebar.error(f"Error: {err}")
+    else:
+        # Validasi kolom wajib
+        if 'kode' in df.columns and 'uraian' in df.columns:
+            df_ahsp = df
+            st.sidebar.success(f"✅ {len(df_ahsp)} Item AHSP Masuk")
+            # TAMPILKAN HASIL BACA (DEBUG)
+            with st.sidebar.expander("👁️ Cek Data AHSP"):
+                st.dataframe(df_ahsp.head(3))
+        else:
+            st.sidebar.error("❌ CSV Salah! Wajib ada kolom: kode, uraian, satuan, tenaga, bahan, alat")
 
-# B. Upload Harga (Toko)
 st.sidebar.markdown("---")
-st.sidebar.header("💰 2. Upload Harga")
+st.sidebar.header("💰 2. Upload Harga Satuan")
 file_harga = st.sidebar.file_uploader("Upload harga.csv", type=["csv"])
 dict_harga = {}
 
 if file_harga:
-    try:
-        df_harga = pd.read_csv(file_harga)
-        df_harga.columns = [c.strip().lower() for c in df_harga.columns]
-        
-        # Buat Dictionary: {"semen": 1500}
-        # Kita pakai huruf kecil semua biar pasti ketemu
-        if 'nama' in df_harga.columns and 'harga' in df_harga.columns:
+    df_h, err_h = smart_read_csv(file_harga)
+    if err_h:
+        st.sidebar.error(f"Error: {err_h}")
+    else:
+        if 'nama' in df_h.columns and 'harga' in df_h.columns:
+            # Buat Dictionary Harga
             dict_harga = dict(zip(
-                df_harga['nama'].astype(str).str.lower().str.strip(),
-                df_harga['harga']
+                df_h['nama'].astype(str).str.lower().str.strip(),
+                df_h['harga']
             ))
-            st.sidebar.success(f"✅ {len(dict_harga)} Harga dimuat")
+            st.sidebar.success(f"✅ {len(dict_harga)} Harga Masuk")
             
-            # Debug: Tampilkan apa yang dibaca
-            with st.sidebar.expander("Cek Harga Terbaca"):
-                st.write(dict_harga)
+            # TAMPILKAN HASIL BACA (DEBUG)
+            with st.sidebar.expander("👁️ Cek Data Harga"):
+                st.dataframe(df_h.head(3))
         else:
-            st.sidebar.error("CSV Harga harus punya kolom 'nama' dan 'harga'")
-            
-    except Exception as e:
-        st.sidebar.error(f"Error Harga: {e}")
+            st.sidebar.error("❌ CSV Salah! Wajib ada kolom: nama, harga")
 
 # ==========================================
 # 2. PROSES MATCHING & HITUNG
@@ -74,32 +92,37 @@ if df_ahsp.empty:
 st.divider()
 
 # Pilih Pekerjaan
-kode = st.selectbox("Pilih Pekerjaan:", df_ahsp['kode'].astype(str) + " - " + df_ahsp['uraian'])
-# Ambil baris data
-row = df_ahsp[df_ahsp['kode'] == kode.split(" - ")[0]].iloc[0]
+# Gabungkan Kode + Uraian biar gampang milihnya
+pilihan_label = df_ahsp['kode'].astype(str) + " | " + df_ahsp['uraian']
+pilihan = st.selectbox("Pilih Pekerjaan:", options=pilihan_label)
+
+# Ambil Kode dari pilihan (split berdasarkan garis tegak |)
+kode_terpilih = pilihan.split(" | ")[0]
+row = df_ahsp[df_ahsp['kode'] == kode_terpilih].iloc[0]
 
 st.subheader(f"Analisa: {row['uraian']}")
-vol = st.number_input(f"Volume ({row['satuan']})", value=1.0)
+col_vol, col_dummy = st.columns([1, 3])
+with col_vol:
+    vol = st.number_input(f"Volume ({row['satuan']})", value=1.0)
 
-# --- FUNGSI PARSING KOEFISIEN ---
-def parse_and_price(text_koef):
+# --- FUNGSI PARSING & PRICING ---
+def process_resources(text_koef):
     """
-    Mengubah teks "Semen 300; Pasir 0.5" menjadi Dictionary Input Harga
+    Mengubah teks "Semen 300; Pasir 0.5" menjadi Dictionary Input
     """
     input_vals = {}
     koef_vals = {}
     
-    if pd.isna(text_koef) or str(text_koef).strip() == "-":
+    if pd.isna(text_koef) or str(text_koef).strip() in ["-", "nan"]:
         return {}, {}
 
-    # Pisahkan berdasarkan titik koma
+    # Pisah titik koma (;)
     items = str(text_koef).split(';')
     
     for item in items:
-        # Regex simple: Ambil Nama (huruf) dan Angka
+        # Regex: Ambil Nama (huruf) dan Angka
         import re
-        # Pola: Ambil apa saja diawal, lalu angka di akhir
-        # Contoh: "Semen 300" -> Nama="Semen", Angka=300
+        # Pola: Nama di depan, Angka di belakang/tengah
         match = re.search(r'^(.*?)\s+([\d\.]+)', item.strip())
         
         if match:
@@ -108,33 +131,33 @@ def parse_and_price(text_koef):
             
             koef_vals[nama_asli] = angka_koef
             
-            # CARI HARGA OTOMATIS
-            # Kunci pencarian: huruf kecil
+            # CARI HARGA (Logic Super Loose)
             kunci = nama_asli.lower()
-            
-            # Cek di kamus harga
             harga_dapat = 0.0
+            
+            # 1. Cari Exact Match
             if kunci in dict_harga:
                 harga_dapat = float(dict_harga[kunci])
             else:
-                # Coba cari mirip-mirip (partial match)
+                # 2. Cari Partial Match (Mirip)
                 for k_csv, v_csv in dict_harga.items():
+                    # Apakah "semen" ada di "semen gresik"? YA.
                     if k_csv in kunci or kunci in k_csv:
                         harga_dapat = float(v_csv)
                         break
             
-            # Tampilkan Input
+            # Input Form
             input_vals[nama_asli] = st.number_input(
                 f"Harga {nama_asli}", 
                 value=harga_dapat,
                 step=100.0,
-                key=f"input_{nama_asli}" # Key unik biar gak error
+                key=f"{kode_terpilih}_{nama_asli}" # Key unik
             )
             
             if harga_dapat > 0:
                 st.caption(f"✅ Auto: Rp {harga_dapat:,.0f}")
             else:
-                st.caption(f"❌ Tidak ketemu di CSV Harga")
+                st.caption(f"❌ Tidak ada di CSV Harga")
                 
     return input_vals, koef_vals
 
@@ -143,15 +166,15 @@ col1, col2, col3 = st.columns(3)
 
 with col1:
     st.info("👷 TENAGA")
-    h_tenaga, k_tenaga = parse_and_price(row['tenaga'])
+    h_tenaga, k_tenaga = process_resources(row.get('tenaga', '-'))
 
 with col2:
     st.warning("🧱 BAHAN")
-    h_bahan, k_bahan = parse_and_price(row['bahan'])
+    h_bahan, k_bahan = process_resources(row.get('bahan', '-'))
 
 with col3:
     st.success("🚜 ALAT")
-    h_alat, k_alat = parse_and_price(row['alat'])
+    h_alat, k_alat = process_resources(row.get('alat', '-'))
 
 # ==========================================
 # 3. TOMBOL HITUNG
@@ -169,9 +192,13 @@ if st.button("🚀 HITUNG RAB SEKARANG", type="primary", use_container_width=Tru
     )
     
     st.success("Perhitungan Selesai!")
-    st.write("### 🧾 Rincian Biaya")
     
+    # Tampilkan Hasil Ringkas
     res_df = pd.DataFrame([hasil])
-    st.dataframe(res_df[['uraian', 'volume', 'hsp_tenaga', 'hsp_bahan', 'hsp_alat', 'harga_satuan', 'total']])
+    st.dataframe(
+        res_df[['uraian', 'volume', 'hsp_tenaga', 'hsp_bahan', 'hsp_alat', 'harga_satuan', 'total']],
+        hide_index=True,
+        use_container_width=True
+    )
     
     st.metric("TOTAL HARGA", f"Rp {hasil['total']:,.0f}")
