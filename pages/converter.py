@@ -1,125 +1,145 @@
 import streamlit as st
 import pandas as pd
 import io
+import re
 
-st.set_page_config(page_title="Mesin Konversi AHSP", page_icon="🏭")
+st.set_page_config(page_title="Mesin Konversi Universal", page_icon="🏭")
 st.title("🏭 Mesin Pencetak Database AHSP")
-st.markdown("Upload file mentah (misal: `Beton.csv`), sistem akan merapikannya menjadi `ahsp_master.csv`.")
+st.caption("Support: Format Analisa SDA (Detail) & Format Cipta Karya (Rekap)")
 
-uploaded_file = st.file_uploader("Upload File CSV Mentah (Format ;)", type=['csv'])
+# Pilihan Mode
+mode_konversi = st.radio(
+    "Pilih Jenis File yang Diupload:",
+    ["1. Format SDA/Beton (Ada rincian Koefisien)", 
+     "2. Format Cipta Karya (Hanya Daftar Harga Jadi)"]
+)
 
-def parse_ahsp_raw(file):
-    # Baca file mentah
-    content = file.getvalue().decode('utf-8', errors='ignore')
-    lines = content.split('\n')
-    
+uploaded_file = st.file_uploader("Upload File CSV Mentah", type=['csv'])
+
+# --- FUNGSI 1: PARSING SDA (DETAIL) ---
+def parse_sda_complex(lines):
     data_list = []
-    
-    # Variabel penampung sementara
-    current_kode = ""
-    current_uraian = ""
-    current_satuan = ""
-    
-    # Penampung koefisien
-    temp_tenaga = []
-    temp_bahan = []
-    temp_alat = []
-    
-    # Mode penanda (sedang baca apa?)
-    mode = None # Bisa 'TENAGA', 'BAHAN', 'ALAT'
+    current_data = {'kode': '', 'uraian': '', 'satuan': 'ls', 'tenaga': [], 'bahan': [], 'alat': []}
+    mode = None 
     
     for line in lines:
         parts = line.split(';')
+        parts = [p.strip().replace('"', '') for p in parts]
         if len(parts) < 2: continue
         
-        col0 = parts[0].strip().replace('"', '')
-        col1 = parts[1].strip().replace('"', '')
-        
-        # 1. Deteksi Judul Pekerjaan (Biasanya Kode angka di depan, misal 3.13.1)
-        # Ciri: Kolom 0 ada titiknya, Kolom 1 ada teks panjang, tidak ada kata 'TENAGA/BAHAN'
-        if '.' in col0 and len(col1) > 5 and 'HARGA' not in col1:
+        # Deteksi Kode (Kolom 0)
+        if re.match(r'^\d+\.\d+', parts[0]) and len(parts[1]) > 3:
+            if current_data['kode']:
+                data_list.append(export_item(current_data))
             
-            # SIMPAN DATA SEBELUMNYA (JIKA ADA)
-            if current_kode != "":
-                data_list.append({
-                    'kode': current_kode,
-                    'uraian': current_uraian,
-                    'satuan': current_satuan, # Satuan kadang terselip
-                    'tenaga': ";".join(temp_tenaga) if temp_tenaga else "-",
-                    'bahan': ";".join(temp_bahan) if temp_bahan else "-",
-                    'alat': ";".join(temp_alat) if temp_alat else "-"
-                })
-            
-            # Reset untuk item baru
-            current_kode = col0
-            current_uraian = col1
-            current_satuan = "ls" # Default, nanti dicari kalau ada
-            temp_tenaga = []
-            temp_bahan = []
-            temp_alat = []
+            current_data = {
+                'kode': parts[0], 'uraian': parts[1], 'satuan': 'ls',
+                'tenaga': [], 'bahan': [], 'alat': []
+            }
             mode = None
             continue
-            
-        # 2. Deteksi Kategori (Tenaga/Bahan/Alat)
-        if "TENAGA" in col1.upper(): mode = "TENAGA"; continue
-        if "BAHAN" in col1.upper(): mode = "BAHAN"; continue
-        if "PERALATAN" in col1.upper() or "ALAT" in col1.upper(): mode = "ALAT"; continue
+
+        # Deteksi Mode
+        col_str = "".join(parts[:2]).upper()
+        if "TENAGA" in col_str: mode = 'tenaga'; continue
+        if "BAHAN" in col_str: mode = 'bahan'; continue
+        if "ALAT" in col_str or "PERALATAN" in col_str: mode = 'alat'; continue
         
-        # 3. Ambil Data Koefisien
-        # Struktur biasanya: No; Uraian; Satuan; Koefisien
-        # Di file beton.csv kakak: Col 1=Uraian, Col 2=Satuan, Col 3=Koefisien
-        if len(parts) >= 4 and mode is not None:
-            nama_item = parts[1].strip()
-            satuan_item = parts[2].strip()
-            koef_str = parts[3].strip()
+        # Ambil Koefisien
+        if mode and len(parts) >= 4:
+            clean_koef = parts[3].replace('.', '').replace(',', '.')
+            if clean_koef.replace('.', '', 1).isdigit():
+                item_str = f"{parts[1]} {clean_koef}"
+                if mode == 'tenaga': current_data['tenaga'].append(item_str)
+                elif mode == 'bahan': current_data['bahan'].append(item_str)
+                elif mode == 'alat': current_data['alat'].append(item_str)
+
+    if current_data['kode']: data_list.append(export_item(current_data))
+    return data_list
+
+# --- FUNGSI 2: PARSING CIPTA KARYA (REKAP) ---
+def parse_cipta_karya(lines):
+    data_list = []
+    
+    for line in lines:
+        # Cipta Karya format: ;Kode;Uraian;Satuan;Harga;...
+        parts = line.split(';')
+        parts = [p.strip().replace('"', '') for p in parts]
+        
+        # Minimal harus ada sampai kolom Satuan (index 3)
+        if len(parts) < 4: continue
+        
+        # Cek apakah Kolom 1 adalah Kode (misal: 1.1.1.1 atau A.2.3)
+        # Regex: Angka titik Angka
+        kode_potensial = parts[1]
+        
+        if re.match(r'^[A-Z0-9]+\.[0-9\.]+', kode_potensial):
+            # INI ADALAH ITEM PEKERJAAN
+            kode = parts[1]
+            uraian = parts[2]
+            satuan = parts[3]
             
-            # Validasi: Harus ada koefisien angka
-            if koef_str and koef_str.replace('.', '').replace(',', '').isdigit():
-                # Bersihkan angka (koma jadi titik)
-                koef_str = koef_str.replace(',', '.')
-                
-                # Format: "Pasir 0.5"
-                entry = f"{nama_item} {koef_str}"
-                
-                if mode == "TENAGA": temp_tenaga.append(entry)
-                elif mode == "BAHAN": temp_bahan.append(entry)
-                elif mode == "ALAT": temp_alat.append(entry)
-                
-                # Coba tebak satuan pekerjaan utama dari baris pekerja pertama
-                if mode == "TENAGA" and current_satuan == "ls":
-                     # Kadang satuan pekerjaan induk tidak tertulis jelas, kita asumsi aman
-                     pass
+            # Karena tidak ada rincian, kita kosongkan komponennya
+            # User nanti harus input manual analisa kalau mau detail
+            
+            data_list.append({
+                'kode': kode,
+                'uraian': uraian,
+                'satuan': satuan,
+                'tenaga': '-', # Data tidak tersedia di file rekap
+                'bahan': '-',
+                'alat': '-'
+            })
+            
+    return data_list
 
-    # Simpan item terakhir
-    if current_kode != "":
-        data_list.append({
-            'kode': current_kode,
-            'uraian': current_uraian,
-            'satuan': 'ls', # Bisa diedit manual nanti
-            'tenaga': ";".join(temp_tenaga) if temp_tenaga else "-",
-            'bahan': ";".join(temp_bahan) if temp_bahan else "-",
-            'alat': ";".join(temp_alat) if temp_alat else "-"
-        })
+def export_item(d):
+    return {
+        'kode': d['kode'],
+        'uraian': d['uraian'],
+        'satuan': d['satuan'],
+        'tenaga': ";".join(d['tenaga']) if d['tenaga'] else "-",
+        'bahan': ";".join(d['bahan']) if d['bahan'] else "-",
+        'alat': ";".join(d['alat']) if d['alat'] else "-"
+    }
 
-    return pd.DataFrame(data_list)
-
+# --- UI UTAMA ---
 if uploaded_file:
-    st.success("File diterima! Sedang memproses...")
-    try:
-        df_result = parse_ahsp_raw(uploaded_file)
-        
-        st.write(f"✅ Berhasil mengekstrak **{len(df_result)}** Analisa Pekerjaan!")
-        st.dataframe(df_result)
-        
-        # Tombol Download
-        csv_export = df_result.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="⬇️ Download Hasil (ahsp_sda_master.csv)",
-            data=csv_export,
-            file_name="ahsp_sda_master.csv",
-            mime="text/csv"
-        )
-        st.info("Upload file hasil download ini ke GitHub folder 'data/'")
-        
-    except Exception as e:
-        st.error(f"Gagal parsing: {e}")
+    with st.spinner("Sedang menyedot data..."):
+        try:
+            content = uploaded_file.getvalue().decode('utf-8', errors='ignore')
+            lines = content.split('\n')
+            
+            if "Format SDA" in mode_konversi:
+                hasil = parse_sda_complex(lines)
+                filename = "ahsp_sda_master.csv"
+            else:
+                hasil = parse_cipta_karya(lines)
+                filename = "ahsp_ciptakarya_master.csv"
+            
+            df_hasil = pd.DataFrame(hasil)
+            
+            if not df_hasil.empty:
+                st.success(f"✅ BERHASIL! Ditemukan **{len(df_hasil)}** Item Pekerjaan.")
+                
+                # Preview
+                with st.expander("👁️ Cek Sampel Data"):
+                    st.dataframe(df_hasil.head(100))
+                
+                if "Format Cipta Karya" in mode_konversi:
+                    st.warning("⚠️ Catatan: File Cipta Karya ini hanya berisi DAFTAR ITEM. Kolom Tenaga/Bahan/Alat kosong karena di file aslinya tidak ada rincian resepnya.")
+
+                # Download
+                csv_data = df_hasil.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label=f"⬇️ Download {filename}",
+                    data=csv_data,
+                    file_name=filename,
+                    mime="text/csv",
+                    type="primary"
+                )
+            else:
+                st.error("❌ Tidak ada data yang terbaca. Cek apakah format file sesuai pilihan mode.")
+                
+        except Exception as e:
+            st.error(f"Error: {e}")
