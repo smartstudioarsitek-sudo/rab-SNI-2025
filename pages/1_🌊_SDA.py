@@ -45,30 +45,20 @@ def load_database():
 df = load_database()
 
 # ==============================
-# 2. LOAD HARGA SATUAN (SHS) - VERSI ROBUST 🛡️
+# 2. LOAD HARGA SATUAN (SHS)
 # ==============================
 def clean_currency(value):
-    """Membersihkan format uang yang ribet (Rp, Titik, Koma, atau Angka Murni)"""
     try:
         if pd.isna(value): return 0.0
-        
-        # Kalau sudah angka (Integer/Float), langsung kembalikan
-        if isinstance(value, (int, float)):
-            return float(value)
-            
-        # Kalau String (Teks), bersihkan
+        if isinstance(value, (int, float)): return float(value)
         str_val = str(value).lower().replace("rp", "").strip()
-        
-        # Logika Indonesia: Titik itu ribuan, Koma itu desimal
-        # Contoh: 10.000,00 -> 10000.0
+        # Logika: Titik ribuan, Koma desimal
         if "," in str_val and "." in str_val:
             str_val = str_val.replace(".", "").replace(",", ".")
-        elif "." in str_val: # Asumsi titik adalah pemisah ribuan (10.000)
-             # Cek jumlah titik, atau posisi titik. Amannya dibuang saja.
+        elif "." in str_val: # 10.000 -> 10000
              str_val = str_val.replace(".", "")
-        elif "," in str_val: # Asumsi koma adalah desimal (10,5)
+        elif "," in str_val: # 10,5 -> 10.5
              str_val = str_val.replace(",", ".")
-             
         return float(str_val)
     except:
         return 0.0
@@ -78,13 +68,12 @@ def load_shs_data(uploaded_file):
         df_shs = pd.read_excel(uploaded_file)
         df_shs.columns = [str(c).strip().lower() for c in df_shs.columns]
         
-        # Cari Kolom NAMA & HARGA (Fleksibel)
         col_uraian = next((c for c in df_shs.columns if "nama" in c or "uraian" in c), None)
         col_harga = next((c for c in df_shs.columns if "harga" in c), None)
         
         if col_uraian and col_harga:
             df_shs['harga_clean'] = df_shs[col_harga].apply(clean_currency)
-            # Filter yang harganya > 0 biar sampah tidak masuk
+            # Ambil yang harganya > 0 saja
             df_valid = df_shs[df_shs['harga_clean'] > 0]
             
             # Buat Dictionary
@@ -99,7 +88,7 @@ def load_shs_data(uploaded_file):
         return {}, 0
 
 # ==============================
-# 3. SIDEBAR: UPLOAD & INPUT
+# 3. SIDEBAR: UPLOAD & SEARCH
 # ==============================
 st.sidebar.header("📥 Data Harga Satuan (SHS)")
 uploaded_shs = st.sidebar.file_uploader("Upload File Excel SHS", type=["xlsx"])
@@ -108,17 +97,22 @@ shs_prices = {}
 if uploaded_shs:
     shs_prices, count = load_shs_data(uploaded_shs)
     if count > 0:
-        st.sidebar.success(f"✅ {count} harga terbaca!")
+        st.sidebar.success(f"✅ {count} item harga terbaca!")
         
-        # --- FITUR DEBUG (PENGECEKAN) ---
-        with st.sidebar.expander("🔍 Cek Sampel Data (Debug)"):
-            st.write("5 Data Pertama yg terbaca:")
-            # Tampilkan 5 item pertama dari dictionary
-            first_5 = {k: shs_prices[k] for k in list(shs_prices)[:5]}
-            st.write(first_5)
-            st.caption("Jika 'Semen' ada di sini, berarti data aman.")
+        # --- FITUR PENCARIAN BARU ---
+        with st.sidebar.expander("🔍 Cari Material di Excel"):
+            cari = st.text_input("Ketik nama (misal: Semen)", "")
+            if cari:
+                # Filter dictionary
+                hasil_cari = {k: v for k, v in shs_prices.items() if cari.lower() in k}
+                if hasil_cari:
+                    st.write("Ditemukan:", hasil_cari)
+                else:
+                    st.warning(f"Tidak ditemukan '{cari}' di Excel.")
+            else:
+                st.caption("Ketik untuk memastikan data masuk.")
     else:
-        st.sidebar.error("⚠️ Gagal baca harga. Cek kolom Excel.")
+        st.sidebar.error("Gagal baca data.")
 
 st.sidebar.markdown("---")
 st.sidebar.header("🛠️ Analisa Pekerjaan")
@@ -155,19 +149,16 @@ input_harga_tenaga = {}
 input_harga_bahan = {}
 input_harga_alat = {}
 
-# --- FUNGSI AUTO-FILL SUPER PINTAR ---
+# --- FUNGSI MATCHING (Cari Kecocokan) ---
 def get_auto_price(resource_name, default_val=0.0):
-    # Bersihkan nama dari DB (Hapus kurung, huruf kecil)
-    # "Semen (PC)" -> "semen"
+    # Nama di DB: "Semen (PC)" -> "semen"
     res_clean = resource_name.lower().split('(')[0].strip()
     
-    # 1. Cari KATA KUNCI di SHS
-    # Loop ini mencari apakah "semen" ada di dalam "semen portland" (atau sebaliknya)
+    # Cari di SHS
     for shs_item, price in shs_prices.items():
-        shs_clean = shs_item.split('(')[0].strip() # Bersihkan nama SHS juga
+        shs_clean = shs_item.split('(')[0].strip()
         
-        # Logika Pencocokan Dua Arah
-        # A in B atau B in A
+        # Logika: Apakah "semen" ada di "semen portland"?
         if res_clean in shs_clean or shs_clean in res_clean:
             return float(price)
             
@@ -178,7 +169,6 @@ if koef_tenaga:
     st.sidebar.subheader("👷 Upah Tenaga")
     for nama, koef in koef_tenaga.items():
         price = get_auto_price(nama, 0.0)
-        # Jika ketemu (price > 0), tampilkan angka itu. Jika 0, biarkan 0.
         input_harga_tenaga[nama] = st.sidebar.number_input(f"Upah {nama}", value=price, step=5000.0)
 
 if koef_bahan:
