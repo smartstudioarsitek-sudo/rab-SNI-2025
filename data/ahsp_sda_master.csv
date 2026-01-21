@@ -5,13 +5,13 @@ T.02.a,Galian Tanah Keras (Cadas) sedalam < 1 m,m3,Pekerja 1.0;Mandor 0.032,-,-
 T.03.a,Galian Tanah Lumpur sedalam < 1 m,m3,Pekerja 1.2;Mandor 0.045,-,-
 T.04.a,Stripping/Kupas Tebing setebal 20 cm,m2,Pekerja 0.04;Mandor 0.004,-,-
 T.05.a,Timbunan Tanah Kembali (Manual),m3,Pekerja 0.33;Mandor 0.01,-,-
-T.05.b,Timbunan Tanah Didatangkan (Borrow),m3,Pekerja 0.5;Mandor 0.015,Tanah Timbun 1.2,-
-T.06.a,Gebalan Rumput (Lempengan),m2,Pekerja 0.2;Mandor 0.01,Rumput Lempengan 1.0,-
-B.01.a,Beton Mutu fc 10 MPa (K-125) Manual,m3,Pekerja 1.65;Tukang 0.275;Mandor 0.165,Semen 276;Pasir Beton 828;Kerikil 1012;Air 215,-
-B.02.a,Beton Mutu fc 15 MPa (K-175) Manual,m3,Pekerja 1.65;Tukang 0.275;Mandor 0.165,Semen 326;Pasir Beton 760;Kerikil 1029;Air 215,-
-B.03.a,Beton Mutu fc 20 MPa (K-225) Manual,m3,Pekerja 1.65;Tukang 0.275;Mandor 0.165,Semen 371;Pasir Beton 698;Kerikil 1047;Air 215,-
-P.01.a,Pasangan Batu Kali Campuran 1:4,m3,Pekerja 1.5;Tukang 0.75;Mandor 0.075,Batu Belah 1.2;Semen 163;Pasir Pasang 0.52,-
-P.01.b,Pasangan Batu Kali Campuran 1:3,m3,Pekerja 1.5;Tukang 0.75;Mandor 0.075,Batu Belah 1.2;Semen 202;Pasir Pasang 0.485,-
-P.02.a,Plesteran 1:4 Tebal 15mm,m2,Pekerja 0.3;Tukang 0.15;Mandor 0.015,Semen 6.24;Pasir Pasang 0.024,-
-P.03.a,Siaran 1:2,m2,Pekerja 0.1;Tukang 0.05;Mandor 0.005,Semen 6.2;Pasir Pasang 0.013,-
-F.01.a,Bekisting Dinding Beton (Papan Kayu),m2,Pekerja 0.52;Tukang 0.26;Mandor 0.026,Papan Kayu 0.04;Paku 0.3;Minyak Bekisting 0.1,-
+T.05.b,Timbunan Tanah Didatangkan (Borrow),m3,Pekerja 0.5;Mandor 0.015,Tanah Timbun 1.2000,-
+T.06.a,Gebalan Rumput (Lempengan),m2,Pekerja 0.2;Mandor 0.01,Rumput Lempengan 1.0000,-
+B.01.a,Beton Mutu fc 10 MPa (K-125) Manual,m3,Pekerja 1.65;Tukang 0.275;Mandor 0.165,Semen 276.0000;Pasir Beton 0.5914;Kerikil 0.7496;Air 215.0000,-
+B.02.a,Beton Mutu fc 15 MPa (K-175) Manual,m3,Pekerja 1.65;Tukang 0.275;Mandor 0.165,Semen 326.0000;Pasir Beton 0.5429;Kerikil 0.7622;Air 215.0000,-
+B.03.a,Beton Mutu fc 20 MPa (K-225) Manual,m3,Pekerja 1.65;Tukang 0.275;Mandor 0.165,Semen 371.0000;Pasir Beton 0.4986;Kerikil 0.7756;Air 215.0000,-
+P.01.a,Pasangan Batu Kali Campuran 1:4,m3,Pekerja 1.5;Tukang 0.75;Mandor 0.075,Batu Belah 1.2000;Semen 163.0000;Pasir Pasang 0.5200,-
+P.01.b,Pasangan Batu Kali Campuran 1:3,m3,Pekerja 1.5;Tukang 0.75;Mandor 0.075,Batu Belah 1.2000;Semen 202.0000;Pasir Pasang 0.4850,-
+P.02.a,Plesteran 1:4 Tebal 15mm,m2,Pekerja 0.3;Tukang 0.15;Mandor 0.015,Semen 6.2400;Pasir Pasang 0.0240,-
+P.03.a,Siaran 1:2,m2,Pekerja 0.1;Tukang 0.05;Mandor 0.005,Semen 6.2000;Pasir Pasang 0.0130,-
+F.01.a,Bekisting Dinding Beton (Papan Kayu),m2,Pekerja 0.52;Tukang 0.26;Mandor 0.026,Papan Kayu 0.0400;Paku 0.3000;Minyak Bekisting 0.1000,-
