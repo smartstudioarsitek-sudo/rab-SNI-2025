@@ -1,44 +1,46 @@
-# File: engine/sda_engine.py
-
-def hitung_rab(kode_ahsp, volume, harga_tenaga, koefisien_tenaga, uraian_pekerjaan, satuan):
+def hitung_rab(
+    kode_ahsp, 
+    uraian_pekerjaan, 
+    satuan, 
+    volume, 
+    harga_tenaga, koefisien_tenaga,
+    harga_bahan, koefisien_bahan,
+    harga_alat, koefisien_alat
+):
     """
-    Menghitung RAB per item pekerjaan (Deterministik).
-    
-    Args:
-        kode_ahsp (str): Kode item (contoh: T.01)
-        volume (float): Volume pekerjaan
-        harga_tenaga (dict): Dict harga satuan upah { 'Pekerja (L.01)': 100000, ... }
-        koefisien_tenaga (dict): Dict koefisien { 'Pekerja (L.01)': 0.5, ... }
-        uraian_pekerjaan (str): Nama pekerjaan
-        satuan (str): Satuan (m3, m2, dll)
-    
-    Returns:
-        dict: Summary perhitungan untuk tabel BOQ
+    Engine Deterministik - Menghitung RAB Lengkap (Tenaga + Bahan + Alat)
     """
     
-    # 1. Hitung Harga Satuan Pekerjaan (HSP)
+    # --- 1. HITUNG SUB-TOTAL TENAGA ---
     hsp_tenaga = 0.0
-    
-    # Loop setiap tenaga kerja (Pekerja, Mandor, dll)
-    for jenis_tenaga, harga_upah in harga_tenaga.items():
-        # Ambil koefisien jika ada, jika tidak 0
-        koef = koefisien_tenaga.get(jenis_tenaga, 0.0)
-        biaya = koef * harga_upah
-        hsp_tenaga += biaya
+    for nama, koef in koefisien_tenaga.items():
+        harga = harga_tenaga.get(nama, 0)
+        hsp_tenaga += koef * harga
 
-    # Total Harga Satuan (HSP)
-    # (Di sini baru tenaga, nanti bisa ditambah bahan/alat di Phase selanjutnya)
-    harga_satuan_final = hsp_tenaga 
+    # --- 2. HITUNG SUB-TOTAL BAHAN ---
+    hsp_bahan = 0.0
+    for nama, koef in koefisien_bahan.items():
+        harga = harga_bahan.get(nama, 0)
+        hsp_bahan += koef * harga
 
-    # 2. Hitung Total Harga (Volume x Harga Satuan)
-    total_harga = volume * harga_satuan_final
+    # --- 3. HITUNG SUB-TOTAL ALAT ---
+    hsp_alat = 0.0
+    for nama, koef in koefisien_alat.items():
+        harga = harga_alat.get(nama, 0)
+        hsp_alat += koef * harga
 
-    # 3. Return Dictionary untuk ditampilkan di Tabel
+    # --- 4. REKAPITULASI ---
+    hsp_total = hsp_tenaga + hsp_bahan + hsp_alat
+    total_harga = volume * hsp_total
+
     return {
         "kode_ahsp": kode_ahsp,
         "uraian": uraian_pekerjaan,
         "satuan": satuan,
         "volume": volume,
-        "harga_satuan": harga_satuan_final,
+        "hsp_tenaga": hsp_tenaga,
+        "hsp_bahan": hsp_bahan,
+        "hsp_alat": hsp_alat,
+        "harga_satuan": hsp_total, # HSP Gabungan
         "total": total_harga
     }
