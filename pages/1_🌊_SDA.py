@@ -3,184 +3,171 @@ import pandas as pd
 import sys
 import os
 
-# Konfigurasi Halaman
-st.set_page_config(page_title="Modul SDA (CSV Mode)", layout="wide")
+# ==============================
+# CONFIG & HEADER
+# ==============================
+st.set_page_config(page_title="Modul SDA", layout="wide")
 
 # Import Engine
 sys.path.append('.')
 try:
     from engine import sda_engine
 except:
-    st.error("Engine tidak ditemukan.")
+    st.error("🚨 Engine tidak ditemukan. Pastikan folder 'engine' ada.")
     st.stop()
 
-st.title("🌊 Modul SDA (CSV Mode)")
-st.caption("Solusi Akhir: Upload CSV Database & CSV Harga")
+st.title("🌊 Modul Sumber Daya Air (SDA)")
+st.caption("Database AHSP Terintegrasi (CSV System)")
 
-# ==========================================
-# FUNGSI BACA CSV PINTAR (Auto-Detect Separator)
-# ==========================================
-def smart_read_csv(uploaded_file):
-    try:
-        # Coba baca pakai KOMA (Default)
-        df = pd.read_csv(uploaded_file)
+# ==============================
+# 1. LOAD DATABASE (OTOMATIS DARI GITHUB)
+# ==============================
+@st.cache_data
+def load_database():
+    # Arahkan ke file CSV yang baru diupload ke folder data
+    path = "data/ahsp_sda_master.csv"
+    
+    if not os.path.exists(path):
+        st.error(f"⚠️ Database tidak ditemukan di: {path}")
+        st.info("Pastikan file 'ahsp_sda_master.csv' sudah diupload ke folder 'data' di GitHub.")
+        st.stop()
         
-        # Kalau kolomnya cuma 1 (berarti gagal pisah), coba pakai TITIK KOMA
+    try:
+        # Coba baca dengan pemisah KOMA (Standar Internasional)
+        df = pd.read_csv(path, sep=",")
+        
+        # Jaga-jaga kalau CSV-nya pakai TITIK KOMA (Format Excel Indo)
         if len(df.columns) < 2:
-            uploaded_file.seek(0) # Reset file pointer
-            df = pd.read_csv(uploaded_file, sep=';')
+            df = pd.read_csv(path, sep=";")
             
-        # Bersihkan nama kolom (huruf kecil, hapus spasi)
+        # Bersihkan nama kolom
         df.columns = [str(c).strip().lower() for c in df.columns]
-        return df, None
+        return df
     except Exception as e:
-        return None, str(e)
+        st.error(f"Error membaca CSV: {e}")
+        st.stop()
 
-# ==========================================
-# 1. SIDEBAR: UPLOAD FILE
-# ==========================================
-st.sidebar.header("📂 1. Upload Database AHSP")
-file_ahsp = st.sidebar.file_uploader("Upload ahsp.csv", type=["csv"])
-df_ahsp = pd.DataFrame()
+# Panggil Fungsi Load
+df_ahsp = load_database()
 
-if file_ahsp:
-    df, err = smart_read_csv(file_ahsp)
-    if err:
-        st.sidebar.error(f"Error: {err}")
-    else:
-        # Validasi kolom wajib
-        if 'kode' in df.columns and 'uraian' in df.columns:
-            df_ahsp = df
-            st.sidebar.success(f"✅ {len(df_ahsp)} Item AHSP Masuk")
-            # TAMPILKAN HASIL BACA (DEBUG)
-            with st.sidebar.expander("👁️ Cek Data AHSP"):
-                st.dataframe(df_ahsp.head(3))
-        else:
-            st.sidebar.error("❌ CSV Salah! Wajib ada kolom: kode, uraian, satuan, tenaga, bahan, alat")
+# ==============================
+# 2. UPLOAD HARGA (USER INPUT)
+# ==============================
+st.sidebar.header("💰 Data Harga Satuan")
+st.sidebar.caption("Upload file CSV harga proyek (Opsional)")
 
-st.sidebar.markdown("---")
-st.sidebar.header("💰 2. Upload Harga Satuan")
 file_harga = st.sidebar.file_uploader("Upload harga.csv", type=["csv"])
 dict_harga = {}
 
 if file_harga:
-    df_h, err_h = smart_read_csv(file_harga)
-    if err_h:
-        st.sidebar.error(f"Error: {err_h}")
-    else:
+    try:
+        # Baca CSV Harga (Smart Detect Separator)
+        df_h = pd.read_csv(file_harga)
+        if len(df_h.columns) < 2:
+            file_harga.seek(0)
+            df_h = pd.read_csv(file_harga, sep=";")
+            
+        df_h.columns = [c.strip().lower() for c in df_h.columns]
+        
         if 'nama' in df_h.columns and 'harga' in df_h.columns:
-            # Buat Dictionary Harga
             dict_harga = dict(zip(
                 df_h['nama'].astype(str).str.lower().str.strip(),
                 df_h['harga']
             ))
             st.sidebar.success(f"✅ {len(dict_harga)} Harga Masuk")
-            
-            # TAMPILKAN HASIL BACA (DEBUG)
-            with st.sidebar.expander("👁️ Cek Data Harga"):
-                st.dataframe(df_h.head(3))
         else:
-            st.sidebar.error("❌ CSV Salah! Wajib ada kolom: nama, harga")
+            st.sidebar.error("CSV Harga harus punya kolom: nama, harga")
+    except Exception as e:
+        st.sidebar.error(f"Gagal baca harga: {e}")
 
-# ==========================================
-# 2. PROSES MATCHING & HITUNG
-# ==========================================
-if df_ahsp.empty:
-    st.info("👈 Silakan upload file 'ahsp.csv' dulu di sidebar.")
-    st.stop()
-
+# ==============================
+# 3. INTERFACE ANALISA
+# ==============================
 st.divider()
 
-# Pilih Pekerjaan
-# Gabungkan Kode + Uraian biar gampang milihnya
-pilihan_label = df_ahsp['kode'].astype(str) + " | " + df_ahsp['uraian']
-pilihan = st.selectbox("Pilih Pekerjaan:", options=pilihan_label)
+if df_ahsp.empty:
+    st.warning("Database kosong atau gagal dimuat.")
+    st.stop()
 
-# Ambil Kode dari pilihan (split berdasarkan garis tegak |)
+# Dropdown Pilihan Pekerjaan
+pilihan_label = df_ahsp['kode'].astype(str) + " | " + df_ahsp['uraian']
+pilihan = st.selectbox("Pilih Item Pekerjaan:", options=pilihan_label)
+
+# Ambil Data Baris Terpilih
 kode_terpilih = pilihan.split(" | ")[0]
 row = df_ahsp[df_ahsp['kode'] == kode_terpilih].iloc[0]
 
+# Tampilkan Info
 st.subheader(f"Analisa: {row['uraian']}")
-col_vol, col_dummy = st.columns([1, 3])
-with col_vol:
-    vol = st.number_input(f"Volume ({row['satuan']})", value=1.0)
+col_vol, _ = st.columns([1, 3])
+vol = col_vol.number_input(f"Volume ({row['satuan']})", value=1.0)
 
-# --- FUNGSI PARSING & PRICING ---
-def process_resources(text_koef):
-    """
-    Mengubah teks "Semen 300; Pasir 0.5" menjadi Dictionary Input
-    """
+# ==============================
+# 4. PARSING & AUTO-PRICE
+# ==============================
+def process_resources(text_koef, tipe):
     input_vals = {}
     koef_vals = {}
     
     if pd.isna(text_koef) or str(text_koef).strip() in ["-", "nan"]:
         return {}, {}
 
-    # Pisah titik koma (;)
     items = str(text_koef).split(';')
-    
     for item in items:
-        # Regex: Ambil Nama (huruf) dan Angka
+        # Regex ambil Nama & Angka
         import re
-        # Pola: Nama di depan, Angka di belakang/tengah
         match = re.search(r'^(.*?)\s+([\d\.]+)', item.strip())
         
         if match:
-            nama_asli = match.group(1).strip()
-            angka_koef = float(match.group(2))
+            nama = match.group(1).strip()
+            koef = float(match.group(2))
+            koef_vals[nama] = koef
             
-            koef_vals[nama_asli] = angka_koef
+            # Cari Harga Otomatis
+            kunci = nama.lower()
+            harga = 0.0
             
-            # CARI HARGA (Logic Super Loose)
-            kunci = nama_asli.lower()
-            harga_dapat = 0.0
-            
-            # 1. Cari Exact Match
+            # Cek di Dictionary Harga
             if kunci in dict_harga:
-                harga_dapat = float(dict_harga[kunci])
+                harga = float(dict_harga[kunci])
             else:
-                # 2. Cari Partial Match (Mirip)
-                for k_csv, v_csv in dict_harga.items():
-                    # Apakah "semen" ada di "semen gresik"? YA.
-                    if k_csv in kunci or kunci in k_csv:
-                        harga_dapat = float(v_csv)
+                # Cek Parsial (Mirip)
+                for k, v in dict_harga.items():
+                    if k in kunci or kunci in k:
+                        harga = float(v)
                         break
             
-            # Input Form
-            input_vals[nama_asli] = st.number_input(
-                f"Harga {nama_asli}", 
-                value=harga_dapat,
-                step=100.0,
-                key=f"{kode_terpilih}_{nama_asli}" # Key unik
+            # Default Harga Jika Tidak Ketemu (Biar tidak 0 banget)
+            if harga == 0:
+                if tipe == "upah": harga = 100000.0
+                elif tipe == "bahan": harga = 0.0
+                elif tipe == "alat": harga = 0.0
+
+            input_vals[nama] = st.number_input(
+                f"{nama}", value=harga, step=1000.0, key=f"{kode_terpilih}_{nama}"
             )
-            
-            if harga_dapat > 0:
-                st.caption(f"✅ Auto: Rp {harga_dapat:,.0f}")
-            else:
-                st.caption(f"❌ Tidak ada di CSV Harga")
-                
     return input_vals, koef_vals
 
-# Tampilkan Form 3 Kolom
-col1, col2, col3 = st.columns(3)
+# Layout 3 Kolom
+c1, c2, c3 = st.columns(3)
 
-with col1:
+with c1:
     st.info("👷 TENAGA")
-    h_tenaga, k_tenaga = process_resources(row.get('tenaga', '-'))
+    h_tenaga, k_tenaga = process_resources(row.get('tenaga', '-'), "upah")
 
-with col2:
+with c2:
     st.warning("🧱 BAHAN")
-    h_bahan, k_bahan = process_resources(row.get('bahan', '-'))
+    h_bahan, k_bahan = process_resources(row.get('bahan', '-'), "bahan")
 
-with col3:
+with c3:
     st.success("🚜 ALAT")
-    h_alat, k_alat = process_resources(row.get('alat', '-'))
+    h_alat, k_alat = process_resources(row.get('alat', '-'), "alat")
 
-# ==========================================
-# 3. TOMBOL HITUNG
-# ==========================================
+# ==============================
+# 5. HITUNG & HASIL
+# ==============================
 st.markdown("---")
-if st.button("🚀 HITUNG RAB SEKARANG", type="primary", use_container_width=True):
+if st.button("🚀 HITUNG RAB", type="primary", use_container_width=True):
     hasil = sda_engine.hitung_rab(
         kode_ahsp=row['kode'],
         uraian_pekerjaan=row['uraian'],
@@ -191,14 +178,10 @@ if st.button("🚀 HITUNG RAB SEKARANG", type="primary", use_container_width=Tru
         harga_alat=h_alat, koefisien_alat=k_alat
     )
     
-    st.success("Perhitungan Selesai!")
-    
-    # Tampilkan Hasil Ringkas
+    # Tampilkan Tabel
     res_df = pd.DataFrame([hasil])
     st.dataframe(
         res_df[['uraian', 'volume', 'hsp_tenaga', 'hsp_bahan', 'hsp_alat', 'harga_satuan', 'total']],
-        hide_index=True,
-        use_container_width=True
+        hide_index=True, use_container_width=True
     )
-    
-    st.metric("TOTAL HARGA", f"Rp {hasil['total']:,.0f}")
+    st.success(f"TOTAL: Rp {hasil['total']:,.0f}")
