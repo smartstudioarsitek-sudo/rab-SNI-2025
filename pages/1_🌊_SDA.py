@@ -4,184 +4,184 @@ import sys
 import os
 
 # ==============================
-# CONFIG & HEADER
+# CONFIG
 # ==============================
-st.set_page_config(page_title="Modul SDA", layout="wide")
-
-# Import Engine
-sys.path.append('.')
-try:
-    from engine import sda_engine
-except:
-    st.error("🚨 Engine tidak ditemukan. Pastikan folder 'engine' ada.")
-    st.stop()
-
-st.title("🌊 Modul Sumber Daya Air (SDA)")
-st.caption("Database AHSP Terintegrasi (CSV System)")
+st.set_page_config(page_title="Modul SDA (Transparan)", layout="wide")
+st.title("🌊 Modul SDA (Kalkulator Transparan)")
+st.caption("Rumus: (Tenaga + Bahan + Alat) + Overhead x Volume")
 
 # ==============================
-# 1. LOAD DATABASE (OTOMATIS DARI GITHUB)
+# 1. LOAD DATABASE (CSV)
 # ==============================
 @st.cache_data
-def load_database():
-    # Arahkan ke file CSV yang baru diupload ke folder data
-    path = "data/ahsp_sda_master.csv"
-    
-    if not os.path.exists(path):
-        st.error(f"⚠️ Database tidak ditemukan di: {path}")
-        st.info("Pastikan file 'ahsp_sda_master.csv' sudah diupload ke folder 'data' di GitHub.")
-        st.stop()
-        
-    try:
-        # Coba baca dengan pemisah KOMA (Standar Internasional)
-        df = pd.read_csv(path, sep=",")
-        
-        # Jaga-jaga kalau CSV-nya pakai TITIK KOMA (Format Excel Indo)
-        if len(df.columns) < 2:
-            df = pd.read_csv(path, sep=";")
-            
-        # Bersihkan nama kolom
-        df.columns = [str(c).strip().lower() for c in df.columns]
-        return df
-    except Exception as e:
-        st.error(f"Error membaca CSV: {e}")
-        st.stop()
+def load_data():
+    # Load AHSP
+    path_ahsp = "data/ahsp_sda_master.csv"
+    if os.path.exists(path_ahsp):
+        try:
+            df = pd.read_csv(path_ahsp, sep=None, engine='python') # Auto-detect separator
+            df.columns = [c.strip().lower() for c in df.columns]
+            return df
+        except: return pd.DataFrame()
+    return pd.DataFrame()
 
-# Panggil Fungsi Load
-df_ahsp = load_database()
+df_ahsp = load_data()
 
 # ==============================
-# 2. UPLOAD HARGA (USER INPUT)
+# 2. INPUT HARGA (SIDEBAR)
 # ==============================
-st.sidebar.header("💰 Data Harga Satuan")
-st.sidebar.caption("Upload file CSV harga proyek (Opsional)")
-
+st.sidebar.header("1. Upload Harga Satuan")
 file_harga = st.sidebar.file_uploader("Upload harga.csv", type=["csv"])
 dict_harga = {}
 
 if file_harga:
     try:
-        # Baca CSV Harga (Smart Detect Separator)
-        df_h = pd.read_csv(file_harga)
-        if len(df_h.columns) < 2:
-            file_harga.seek(0)
-            df_h = pd.read_csv(file_harga, sep=";")
-            
+        df_h = pd.read_csv(file_harga, sep=None, engine='python')
         df_h.columns = [c.strip().lower() for c in df_h.columns]
-        
         if 'nama' in df_h.columns and 'harga' in df_h.columns:
             dict_harga = dict(zip(
                 df_h['nama'].astype(str).str.lower().str.strip(),
                 df_h['harga']
             ))
-            st.sidebar.success(f"✅ {len(dict_harga)} Harga Masuk")
-        else:
-            st.sidebar.error("CSV Harga harus punya kolom: nama, harga")
-    except Exception as e:
-        st.sidebar.error(f"Gagal baca harga: {e}")
+            st.sidebar.success(f"✅ {len(dict_harga)} Harga Terbaca")
+    except:
+        st.sidebar.error("Gagal baca CSV Harga")
 
 # ==============================
-# 3. INTERFACE ANALISA
+# 3. PROSES ANALISA
 # ==============================
-st.divider()
-
 if df_ahsp.empty:
-    st.warning("Database kosong atau gagal dimuat.")
+    st.warning("⚠️ File 'data/ahsp_sda_master.csv' belum ada di GitHub/Folder Data.")
     st.stop()
 
-# Dropdown Pilihan Pekerjaan
-pilihan_label = df_ahsp['kode'].astype(str) + " | " + df_ahsp['uraian']
-pilihan = st.selectbox("Pilih Item Pekerjaan:", options=pilihan_label)
+st.sidebar.markdown("---")
+st.sidebar.header("2. Pilih Pekerjaan")
 
-# Ambil Data Baris Terpilih
-kode_terpilih = pilihan.split(" | ")[0]
-row = df_ahsp[df_ahsp['kode'] == kode_terpilih].iloc[0]
+# Pilihan
+pilihan = st.sidebar.selectbox("Item:", df_ahsp['kode'] + " | " + df_ahsp['uraian'])
+kode = pilihan.split(" | ")[0]
+row = df_ahsp[df_ahsp['kode'] == kode].iloc[0]
 
-# Tampilkan Info
-st.subheader(f"Analisa: {row['uraian']}")
-col_vol, _ = st.columns([1, 3])
-vol = col_vol.number_input(f"Volume ({row['satuan']})", value=1.0)
+# Volume
+vol = st.sidebar.number_input(f"Volume ({row['satuan']})", value=1.0, min_value=0.0)
 
-# ==============================
-# 4. PARSING & AUTO-PRICE
-# ==============================
-def process_resources(text_koef, tipe):
-    input_vals = {}
-    koef_vals = {}
+# Opsi Overhead
+st.sidebar.markdown("---")
+pakai_overhead = st.sidebar.checkbox("Hitung Overhead (15%)?", value=True)
+
+# --- FUNGSI INPUT & HITUNG ---
+rincian_hitung = [] # Untuk menyimpan log perhitungan
+
+def proses_input(label, text_koef):
+    subtotal_kategori = 0.0
+    inputs = {}
     
+    st.subheader(label)
     if pd.isna(text_koef) or str(text_koef).strip() in ["-", "nan"]:
-        return {}, {}
+        st.caption("- Tidak ada -")
+        return 0.0
 
     items = str(text_koef).split(';')
     for item in items:
-        # Regex ambil Nama & Angka
         import re
         match = re.search(r'^(.*?)\s+([\d\.]+)', item.strip())
-        
         if match:
             nama = match.group(1).strip()
             koef = float(match.group(2))
-            koef_vals[nama] = koef
             
-            # Cari Harga Otomatis
+            # Cari Harga
             kunci = nama.lower()
-            harga = 0.0
+            harga_default = 0.0
             
-            # Cek di Dictionary Harga
+            # 1. Exact Match
             if kunci in dict_harga:
-                harga = float(dict_harga[kunci])
+                harga_default = float(dict_harga[kunci])
+            # 2. Partial Match
             else:
-                # Cek Parsial (Mirip)
                 for k, v in dict_harga.items():
                     if k in kunci or kunci in k:
-                        harga = float(v)
+                        harga_default = float(v)
                         break
             
-            # Default Harga Jika Tidak Ketemu (Biar tidak 0 banget)
-            if harga == 0:
-                if tipe == "upah": harga = 100000.0
-                elif tipe == "bahan": harga = 0.0
-                elif tipe == "alat": harga = 0.0
-
-            input_vals[nama] = st.number_input(
-                f"{nama}", value=harga, step=1000.0, key=f"{kode_terpilih}_{nama}"
-            )
-    return input_vals, koef_vals
+            # Input User
+            col_a, col_b = st.columns([2, 1])
+            input_harga = col_a.number_input(f"{nama}", value=harga_default, step=100.0, key=f"{kode}_{nama}")
+            col_b.write(f"Koef: {koef}")
+            
+            # Hitung per Item
+            total_item = input_harga * koef
+            subtotal_kategori += total_item
+            
+            # Simpan ke Rincian
+            rincian_hitung.append({
+                "Kategori": label,
+                "Komponen": nama,
+                "Koefisien": koef,
+                "Harga Satuan": input_harga,
+                "Total (Koef x Harga)": total_item
+            })
+            
+    st.markdown(f"**Subtotal {label}: Rp {subtotal_kategori:,.2f}**")
+    return subtotal_kategori
 
 # Layout 3 Kolom
 c1, c2, c3 = st.columns(3)
 
 with c1:
-    st.info("👷 TENAGA")
-    h_tenaga, k_tenaga = process_resources(row.get('tenaga', '-'), "upah")
-
+    tot_tenaga = proses_input("Tenaga", row.get('tenaga', '-'))
 with c2:
-    st.warning("🧱 BAHAN")
-    h_bahan, k_bahan = process_resources(row.get('bahan', '-'), "bahan")
-
+    tot_bahan = proses_input("Bahan", row.get('bahan', '-'))
 with c3:
-    st.success("🚜 ALAT")
-    h_alat, k_alat = process_resources(row.get('alat', '-'), "alat")
+    tot_alat = proses_input("Alat", row.get('alat', '-'))
 
 # ==============================
-# 5. HITUNG & HASIL
+# 4. TOTAL REKAPITULASI (RUMUS TRANSPARAN)
 # ==============================
-st.markdown("---")
-if st.button("🚀 HITUNG RAB", type="primary", use_container_width=True):
-    hasil = sda_engine.hitung_rab(
-        kode_ahsp=row['kode'],
-        uraian_pekerjaan=row['uraian'],
-        satuan=row['satuan'],
-        volume=vol,
-        harga_tenaga=h_tenaga, koefisien_tenaga=k_tenaga,
-        harga_bahan=h_bahan, koefisien_bahan=k_bahan,
-        harga_alat=h_alat, koefisien_alat=k_alat
-    )
+st.divider()
+st.header("🧾 Rekapitulasi Harga")
+
+# Hitung Matematika Murni
+jumlah_dasar = tot_tenaga + tot_bahan + tot_alat
+nilai_overhead = jumlah_dasar * 0.15 if pakai_overhead else 0
+hsp_total = jumlah_dasar + nilai_overhead
+grand_total = hsp_total * vol
+
+col_res1, col_res2 = st.columns([1, 2])
+
+with col_res1:
+    st.markdown("### Rincian HSP")
+    st.write(f"1. Jumlah Tenaga: **Rp {tot_tenaga:,.2f}**")
+    st.write(f"2. Jumlah Bahan: **Rp {tot_bahan:,.2f}**")
+    st.write(f"3. Jumlah Alat: **Rp {tot_alat:,.2f}**")
+    st.markdown("---")
+    st.write(f"**Jumlah (1+2+3): Rp {jumlah_dasar:,.2f}**")
     
-    # Tampilkan Tabel
-    res_df = pd.DataFrame([hasil])
-    st.dataframe(
-        res_df[['uraian', 'volume', 'hsp_tenaga', 'hsp_bahan', 'hsp_alat', 'harga_satuan', 'total']],
-        hide_index=True, use_container_width=True
-    )
-    st.success(f"TOTAL: Rp {hasil['total']:,.0f}")
+    if pakai_overhead:
+        st.write(f"Overhead (15%): Rp {nilai_overhead:,.2f}")
+    else:
+        st.write("Overhead: Rp 0 (Tidak dipilih)")
+        
+    st.success(f"**HSP (Harga Satuan): Rp {hsp_total:,.2f}**")
+
+with col_res2:
+    st.markdown("### Total Rencana Anggaran (RAB)")
+    st.write(f"Volume Pekerjaan: {vol} {row['satuan']}")
+    st.write(f"HSP x Volume: Rp {hsp_total:,.2f} x {vol}")
+    st.markdown("### GRAND TOTAL:")
+    st.header(f"Rp {grand_total:,.0f}")
+
+# ==============================
+# 5. TABEL CEK RUMUS (AUDIT)
+# ==============================
+with st.expander("🔍 Cek Rincian Perkalian (Audit Trail)"):
+    if rincian_hitung:
+        df_rincian = pd.DataFrame(rincian_hitung)
+        # Format angka biar ada komanya
+        st.dataframe(df_rincian.style.format({
+            "Koefisien": "{:.4f}",
+            "Harga Satuan": "Rp {:,.0f}",
+            "Total (Koef x Harga)": "Rp {:,.2f}"
+        }))
+        st.info("Rumus: Total = (Koefisien x Harga Satuan)")
+    else:
+        st.write("Belum ada data dihitung.")
