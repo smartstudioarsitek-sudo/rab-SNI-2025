@@ -23,49 +23,62 @@ def load_ahsp():
 df_ahsp = load_ahsp()
 
 # ==============================
-# FITUR BARU: UPLOAD EXCEL / CSV
+# 1. UPLOAD HARGA (FORMAT KAKAK)
 # ==============================
 st.sidebar.header("1. Upload Daftar Harga")
-st.sidebar.caption("Support: .xlsx (Excel) dan .csv")
+st.sidebar.caption("Format: Nama Bahan & Harga (Excel/CSV)")
 
-file_harga = st.sidebar.file_uploader("Upload File SHS", type=["csv", "xlsx"])
+file_harga = st.sidebar.file_uploader("Upload SHS", type=["xlsx", "csv"])
 dict_harga = {}
 
 if file_harga:
     try:
-        # Deteksi tipe file
-        if file_harga.name.endswith('.csv'):
-            df_h = pd.read_csv(file_harga, sep=None, engine='python')
-        else:
-            # Baca Excel (Sheet pertama)
+        # 1. Baca File
+        if file_harga.name.endswith('.xlsx'):
             df_h = pd.read_excel(file_harga)
+        else:
+            df_h = pd.read_csv(file_harga, sep=None, engine='python')
             
-        # Standarisasi Header
+        # 2. Bersihkan Header (Huruf kecil semua)
         df_h.columns = [str(c).strip().lower() for c in df_h.columns]
         
-        # Cari kolom 'nama' dan 'harga'
-        col_nama = next((c for c in df_h.columns if 'nama' in c or 'uraian' in c), None)
-        col_harga = next((c for c in df_h.columns if 'harga' in c), None)
+        # 3. Cari Kolom NAMA dan HARGA secara Pintar
+        col_nama = None
+        col_harga = None
         
+        for col in df_h.columns:
+            if "nama" in col or "uraian" in col or "komponen" in col:
+                col_nama = col
+            if "harga" in col or "price" in col or "rupiah" in col:
+                col_harga = col
+        
+        # 4. Proses Jika Kolom Ketemu
         if col_nama and col_harga:
-            # Bersihkan dan buat Dictionary
-            df_h = df_h.dropna(subset=[col_nama, col_harga])
+            # Buang baris yang harganya kosong (biasanya baris Judul Kategori)
+            df_h = df_h.dropna(subset=[col_harga])
+            
+            # Bersihkan Nama (Hapus Enter '\n' dan spasi)
+            df_h[col_nama] = df_h[col_nama].astype(str).str.replace('\n', ' ').str.strip().str.lower()
+            
+            # Buat Kamus Harga
             dict_harga = dict(zip(
-                df_h[col_nama].astype(str).str.lower().str.strip(),
+                df_h[col_nama],
                 df_h[col_harga]
             ))
-            st.sidebar.success(f"✅ {len(dict_harga)} Harga Terbaca!")
+            st.sidebar.success(f"✅ {len(dict_harga)} Item Harga Terbaca!")
             
-            # Preview Kecil
-            with st.sidebar.expander("Cek Sampel Harga"):
-                st.write(df_h[[col_nama, col_harga]].head())
+            # Preview (Opsional)
+            with st.sidebar.expander("Cek Sampel Data"):
+                st.write(df_h[[col_nama, col_harga]].head(5))
         else:
-            st.sidebar.error("❌ Tidak ketemu kolom 'Nama' dan 'Harga' di file ini.")
+            st.sidebar.error(f"❌ Kolom tidak dikenali. Pastikan ada kata 'Nama' dan 'Harga' di header Excel.")
+            st.sidebar.write("Header terbaca:", df_h.columns.tolist())
+            
     except Exception as e:
         st.sidebar.error(f"Error baca file: {e}")
 
 # ==============================
-# LOGIKA PROGRAM (SAMA SEPERTI SEBELUMNYA)
+# LOGIKA PROGRAM (TETAP SAMA)
 # ==============================
 if df_ahsp.empty:
     st.error("Database AHSP belum ada (ahsp_sda_master.csv).")
@@ -82,7 +95,9 @@ vol = st.sidebar.number_input(f"Volume ({row['satuan']})", value=1.0, min_value=
 
 def cari_harga(nama_item):
     kunci = nama_item.lower().strip()
+    # 1. Cari Persis
     if kunci in dict_harga: return float(dict_harga[kunci]), True
+    # 2. Cari Mirip
     for k, v in dict_harga.items():
         if k in kunci or kunci in k: return float(v), True
     return 0.0, False
