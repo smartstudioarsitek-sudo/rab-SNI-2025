@@ -30,12 +30,12 @@ PERSONAS = {
     """
 }
 
+==========================================
+# 2. FUNGSI PEMANGGIL AI (DYNAMIC MODEL) 🧠
 # ==========================================
-# 2. FUNGSI PEMANGGIL GEMINI 2.0 FLASH 🚀
-# ==========================================
-def tanya_ahli(api_key, tipe_ahli, pertanyaan):
+def tanya_ahli(api_key, tipe_ahli, pertanyaan, model_name="gemini-2.0-flash"):
     """
-    Mengirim prompt ke Google Gemini 2.0 Flash (Model Terbaru)
+    Mengirim prompt ke Google Gemini dengan Model yang DIPILIH USER.
     """
     if not api_key:
         return "⚠️ Mohon masukkan Google Gemini API Key terlebih dahulu."
@@ -44,14 +44,14 @@ def tanya_ahli(api_key, tipe_ahli, pertanyaan):
         # Konfigurasi API
         genai.configure(api_key=api_key)
         
-        # --- UPDATE: MENGGUNAKAN GEMINI 2.0 FLASH ---
-        # Model ini ada di daftar API Key Anda (Index ke-2)
-        model = genai.GenerativeModel('gemini-2.0-flash') 
+        # --- GUNAKAN MODEL SESUAI PILIHAN USER ---
+        # Parameter 'model_name' dikirim dari halaman depan (UI)
+        model = genai.GenerativeModel(model_name) 
         
         # Ambil instruksi persona
         peran = PERSONAS.get(tipe_ahli, "Anda adalah asisten konstruksi.")
         
-        # Rakit Prompt Lengkap
+        # Rakit Prompt
         full_prompt = f"""
         PERAN SYSTEM:
         {peran}
@@ -59,8 +59,8 @@ def tanya_ahli(api_key, tipe_ahli, pertanyaan):
         PERTANYAAN USER:
         {pertanyaan}
 
-        INSTRUKSI OUTPUT:
-        Jawablah dalam Bahasa Indonesia. Gunakan format Markdown (Bold, List, Tabel) agar mudah dibaca oleh kontraktor.
+        INSTRUKSI:
+        Jawablah dalam Bahasa Indonesia yang profesional. Gunakan Markdown (Bold, Tabel, List).
         """
         
         # Generate Jawaban
@@ -68,14 +68,20 @@ def tanya_ahli(api_key, tipe_ahli, pertanyaan):
         return response.text
         
     except Exception as e:
-        # Error Handling yang ramah
-        return f"""
-        🚨 **Terjadi Kesalahan Koneksi:**
-        
-        Error: `{str(e)}`
-        
-        **Solusi:**
-        1. Cek apakah API Key Anda benar.
-        2. Pastikan Anda punya kuota gratis di Google AI Studio.
-        3. Coba refresh halaman.
-        """
+        error_msg = str(e)
+        if "429" in error_msg:
+            return f"""
+            🚨 **KUOTA HABIS (Limit Tercapai)**
+            
+            Model `{model_name}` sedang sibuk atau limit harian Anda habis.
+            👉 **SOLUSI:** Silakan ganti **Model AI** di Sidebar (misal: coba pilih 'Gemini Pro' atau 'Flash 1.5').
+            """
+        elif "404" in error_msg:
+             return f"""
+            🚨 **MODEL TIDAK DITEMUKAN**
+            
+            Model `{model_name}` tidak tersedia untuk API Key ini.
+            👉 **SOLUSI:** Pilih model lain di Sidebar yang lebih umum (misal: 'Gemini Pro').
+            """
+        else:
+            return f"🚨 **Terjadi Kesalahan:** {error_msg}"
