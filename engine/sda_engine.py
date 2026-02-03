@@ -137,7 +137,25 @@ if "boq" in st.session_state and st.session_state.boq:
         file_name="RAB_JIAT_SmartStudio.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
+def hitung_hsp_total(koefisien_data, harga_satuan_raya):
+    """
+    koefisien_data: list of dict berisi {tipe: 'bahan', nama: 'Semen', koef: 0.1}
+    harga_satuan_raya: dict harga terbaru dari user
+    """
+    total_upah = 0
+    total_bahan = 0
+    total_alat = 0
     
+    for item in koefisien_data:
+        biaya = item['koef'] * harga_satuan_raya.get(item['nama'], 0)
+        if item['tipe'] == 'tenaga': total_upah += biaya
+        elif item['tipe'] == 'bahan': total_bahan += biaya
+        elif item['tipe'] == 'alat': total_alat += biaya
+        
+    hsp_total = total_upah + total_bahan + total_alat
+    return hsp_total, total_upah, total_bahan, total_alat
     }
+
 
 
