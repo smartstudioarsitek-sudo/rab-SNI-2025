@@ -43,4 +43,28 @@ def hitung_rab(
         "hsp_alat": hsp_alat,
         "harga_satuan": hsp_total, # HSP Gabungan
         "total": total_harga
+        
+# Saran penambahan error handling pada engine
+def hitung_rab(kode_ahsp, volume, harga_tenaga, koefisien_tenaga, uraian_pekerjaan, satuan):
+    try:
+        hsp_tenaga = 0.0
+        for jenis_tenaga, harga_upah in harga_tenaga.items():
+            # Menggunakan .get() dengan default 0 untuk mencegah KeyError
+            koef = float(koefisien_tenaga.get(jenis_tenaga, 0.0))
+            hsp_tenaga += koef * harga_upah
+        
+        total_harga = hsp_tenaga * volume
+        
+        return {
+            "kode_ahsp": kode_ahsp,
+            "uraian": uraian_pekerjaan,
+            "satuan": satuan,
+            "volume": volume,
+            "hsp_tenaga": hsp_tenaga,
+            "harga_satuan": hsp_tenaga, # Nanti ditambah bahan + alat
+            "total": total_harga
+        }
+    except Exception as e:
+        return {"error": str(e)}
     }
+
