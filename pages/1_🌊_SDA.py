@@ -1,152 +1,209 @@
 import streamlit as st
 import pandas as pd
-import os
+import io
 
-st.set_page_config(page_title="Modul SDA (Final)", layout="wide")
-st.title("🌊 Modul SDA (Penyusunan RAB)")
-
-if "rab_list" not in st.session_state:
-    st.session_state.rab_list = []
-
-# --- LOAD DATABASE ---
-@st.cache_data
-def load_ahsp():
-    path = "data/ahsp_sda_master.csv"
-    if os.path.exists(path):
-        try:
-            df = pd.read_csv(path, sep=None, engine='python')
-            df.columns = [c.strip().lower() for c in df.columns]
-            return df
-        except: return pd.DataFrame()
-    return pd.DataFrame()
-
-df_ahsp = load_ahsp()
-
-# ==============================
-# 1. UPLOAD HARGA (FORMAT KAKAK)
-# ==============================
-st.sidebar.header("1. Upload Daftar Harga")
-st.sidebar.caption("Format: Nama Bahan & Harga (Excel/CSV)")
-
-file_harga = st.sidebar.file_uploader("Upload SHS", type=["xlsx", "csv"])
-dict_harga = {}
-
-if file_harga:
-    try:
-        # 1. Baca File
-        if file_harga.name.endswith('.xlsx'):
-            df_h = pd.read_excel(file_harga)
-        else:
-            df_h = pd.read_csv(file_harga, sep=None, engine='python')
-            
-        # 2. Bersihkan Header (Huruf kecil semua)
-        df_h.columns = [str(c).strip().lower() for c in df_h.columns]
-        
-        # 3. Cari Kolom NAMA dan HARGA secara Pintar
-        col_nama = None
-        col_harga = None
-        
-        for col in df_h.columns:
-            if "nama" in col or "uraian" in col or "komponen" in col:
-                col_nama = col
-            if "harga" in col or "price" in col or "rupiah" in col:
-                col_harga = col
-        
-        # 4. Proses Jika Kolom Ketemu
-        if col_nama and col_harga:
-            # Buang baris yang harganya kosong (biasanya baris Judul Kategori)
-            df_h = df_h.dropna(subset=[col_harga])
-            
-            # Bersihkan Nama (Hapus Enter '\n' dan spasi)
-            df_h[col_nama] = df_h[col_nama].astype(str).str.replace('\n', ' ').str.strip().str.lower()
-            
-            # Buat Kamus Harga
-            dict_harga = dict(zip(
-                df_h[col_nama],
-                df_h[col_harga]
-            ))
-            st.sidebar.success(f"✅ {len(dict_harga)} Item Harga Terbaca!")
-            
-            # Preview (Opsional)
-            with st.sidebar.expander("Cek Sampel Data"):
-                st.write(df_h[[col_nama, col_harga]].head(5))
-        else:
-            st.sidebar.error(f"❌ Kolom tidak dikenali. Pastikan ada kata 'Nama' dan 'Harga' di header Excel.")
-            st.sidebar.write("Header terbaca:", df_h.columns.tolist())
-            
-    except Exception as e:
-        st.sidebar.error(f"Error baca file: {e}")
-
-# ==============================
-# LOGIKA PROGRAM (TETAP SAMA)
-# ==============================
-if df_ahsp.empty:
-    st.error("Database AHSP belum ada (ahsp_sda_master.csv).")
+# Import Engine (Pastikan file sda_engine.py yang baru sudah ada di folder engine)
+try:
+    from engine import sda_engine
+except ImportError:
+    st.error("🚨 File engine/sda_engine.py tidak ditemukan!")
     st.stop()
 
-st.sidebar.markdown("---")
-st.sidebar.header("2. Input Pekerjaan")
+# ==========================================
+# CONFIG HALAMAN
+# ==========================================
+st.set_page_config(page_title="Modul SDA (Lite)", page_icon="🌊", layout="wide")
+st.title("🌊 Modul SDA (Simple Mode)")
+st.caption("Mode Input Fleksibel: Gunakan Data Bawaan atau Upload Data Proyek Sendiri")
 
-pilihan = st.sidebar.selectbox("Pilih Item:", df_ahsp['kode'] + " | " + df_ahsp['uraian'])
-kode = pilihan.split(" | ")[0]
-row = df_ahsp[df_ahsp['kode'] == kode].iloc[0]
+# Init Session State
+if "boq_sda" not in st.session_state:
+    st.session_state.boq_sda = []
 
-vol = st.sidebar.number_input(f"Volume ({row['satuan']})", value=1.0, min_value=0.1)
+# ==========================================
+# 1. DATABASE CERDAS (ON-THE-FLY)
+# ==========================================
+def get_default_data():
+    """
+    Membuat data dummy otomatis agar aplikasi tidak kosong/error
+    saat database Excel belum siap.
+    """
+    data = [
+        {
+            "kode": "T.01", 
+            "uraian": "Galian Tanah Biasa (Manual)", 
+            "satuan": "m3",
+            "tenaga": {"Pekerja": 0.750, "Mandor": 0.025},
+            "bahan": {},
+            "alat": {}
+        },
+        {
+            "kode": "P.01", 
+            "uraian": "Pasangan Batu Kali 1:4", 
+            "satuan": "m3",
+            "tenaga": {"Pekerja": 1.500, "Tukang Batu": 0.750, "Mandor": 0.075},
+            "bahan": {"Batu Kali": 1.200, "Semen": 163.00, "Pasir": 0.520},
+            "alat": {}
+        },
+        {
+            "kode": "B.05", 
+            "uraian": "Beton K-175 (Manual)", 
+            "satuan": "m3",
+            "tenaga": {"Pekerja": 1.650, "Tukang Batu": 0.275, "Mandor": 0.083},
+            "bahan": {"Semen": 326.00, "Pasir": 0.760, "Kerikil": 1.029},
+            "alat": {}
+        }
+    ]
+    return pd.DataFrame(data)
 
-def cari_harga(nama_item):
-    kunci = nama_item.lower().strip()
-    # 1. Cari Persis
-    if kunci in dict_harga: return float(dict_harga[kunci]), True
-    # 2. Cari Mirip
-    for k, v in dict_harga.items():
-        if k in kunci or kunci in k: return float(v), True
-    return 0.0, False
+# --- SIDEBAR: PILIH SUMBER DATA ---
+st.sidebar.header("📂 Sumber Data Analisa")
+pilihan_sumber = st.sidebar.radio(
+    "Pilih Database:",
+    ["Gunakan Data Contoh (Default)", "Upload Excel Proyek"]
+)
 
-def hitung_komponen(label, text_data):
-    total = 0.0
-    detail_html = ""
-    if pd.isna(text_data) or str(text_data).strip() in ["-", "nan"]:
-        return 0.0, "<small>- Tidak ada -</small>"
+df_ahsp = pd.DataFrame()
 
-    for item in str(text_data).split(';'):
-        import re
-        match = re.search(r'^(.*?)\s+([\d\.]+)', item.strip())
-        if match:
-            nama = match.group(1).strip()
-            koef = float(match.group(2))
-            harga, ketemu = cari_harga(nama)
-            subtotal = koef * harga
-            total += subtotal
-            warna = "green" if ketemu else "red"
-            status = f"✅ {harga:,.0f}" if ketemu else "❌ 0"
-            detail_html += f"<div style='border-bottom:1px solid #eee;'><b>{nama}</b> <span style='color:{warna}'>({status})</span><br>{koef} x {harga:,.0f} = <b>{subtotal:,.0f}</b></div>"
-    return total, detail_html
+if pilihan_sumber == "Gunakan Data Contoh (Default)":
+    df_ahsp = get_default_data()
+    st.sidebar.success("✅ Menggunakan 3 Data Contoh (Aman)")
+else:
+    file_user = st.sidebar.file_uploader("Upload Excel Analisa (Format Custom)", type=["xlsx"])
+    if file_user:
+        try:
+            # Baca Excel user (Asumsi kolom sederhana)
+            df_ahsp = pd.read_excel(file_user)
+            st.sidebar.success(f"✅ Terload: {len(df_ahsp)} item")
+        except:
+            st.sidebar.error("Format Excel tidak terbaca.")
+    else:
+        st.sidebar.info("Silakan upload file, atau kembali ke mode Default.")
 
-st.subheader(f"Analisa: {row['uraian']}")
-c1, c2, c3 = st.columns(3)
-with c1: 
-    st.info("Tenaga"); t1, h1 = hitung_komponen("Tenaga", row.get('tenaga', '-')); st.markdown(h1, unsafe_allow_html=True); st.write(f"**Sub: {t1:,.0f}**")
-with c2: 
-    st.warning("Bahan"); t2, h2 = hitung_komponen("Bahan", row.get('bahan', '-')); st.markdown(h2, unsafe_allow_html=True); st.write(f"**Sub: {t2:,.0f}**")
-with c3: 
-    st.success("Alat"); t3, h3 = hitung_komponen("Alat", row.get('alat', '-')); st.markdown(h3, unsafe_allow_html=True); st.write(f"**Sub: {t3:,.0f}**")
+# ==========================================
+# 2. INPUT HARGA SATUAN (SHS)
+# ==========================================
+st.sidebar.divider()
+st.sidebar.header("💰 Harga Dasar (SHS)")
+# Default harga agar user tidak capek ngetik di awal
+default_harga = {
+    "Pekerja": 100000, "Mandor": 150000, "Tukang Batu": 120000,
+    "Semen": 1300, "Pasir": 250000, "Batu Kali": 300000, "Kerikil": 280000
+}
 
-jumlah = t1 + t2 + t3
-oh = jumlah * 0.15
-total = (jumlah + oh) * vol
+# Opsi Upload Harga
+upload_harga = st.sidebar.file_uploader("Upload File Harga (Opsional)", type=["xlsx", "csv"])
+harga_final = default_harga.copy()
 
+if upload_harga:
+    # Logika baca file harga (sederhana)
+    try:
+        df_h = pd.read_csv(upload_harga) if upload_harga.name.endswith('csv') else pd.read_excel(upload_harga)
+        # Asumsi kolom 0 = nama, kolom 1 = harga
+        new_prices = dict(zip(df_h.iloc[:,0], df_h.iloc[:,1]))
+        harga_final.update(new_prices)
+        st.sidebar.success(f"Harga terupdate: {len(new_prices)} item")
+    except:
+        pass
+
+# Tampilkan Editor Harga (Agar user bisa ubah manual)
+with st.sidebar.expander("📝 Edit Harga Manual"):
+    harga_final["Pekerja"] = st.number_input("Upah Pekerja", value=harga_final.get("Pekerja", 0))
+    harga_final["Semen"] = st.number_input("Harga Semen (per Kg)", value=harga_final.get("Semen", 0))
+    # Tambahkan input lain sesuai kebutuhan
+
+# ==========================================
+# 3. AREA KERJA UTAMA
+# ==========================================
+
+if df_ahsp.empty:
+    st.warning("Belum ada data analisa. Pilih 'Gunakan Data Contoh' di sidebar.")
+else:
+    # --- PILIH ITEM PEKERJAAN ---
+    pilihan_item = st.selectbox(
+        "🛠️ Pilih Item Pekerjaan:",
+        df_ahsp['uraian'].tolist()
+    )
+    
+    # Ambil data lengkap item yang dipilih
+    row = df_ahsp[df_ahsp['uraian'] == pilihan_item].iloc[0]
+    
+    col_vol, col_sat = st.columns([1,1])
+    vol = col_vol.number_input("Volume", value=1.0, step=0.1)
+    sat = col_sat.text_input("Satuan", value=row['satuan'], disabled=True)
+
+    # --- RINCIAN KOEFISIEN (Display Only) ---
+    with st.expander("🔍 Lihat Koefisien Analisa"):
+        c1, c2 = st.columns(2)
+        c1.write("**Tenaga:**")
+        c1.json(row['tenaga']) # Menampilkan dictionary koefisien
+        c2.write("**Bahan:**")
+        c2.json(row['bahan'])
+
+    # --- HITUNG DENGAN ENGINE ---
+    if st.button("➕ Masukkan ke RAB"):
+        # Mapping harga otomatis (Case Insensitive sederhana)
+        def match_price(nama_item):
+            # Cari nama yang mirip di dictionary harga
+            for k, v in harga_final.items():
+                if k.lower() in str(nama_item).lower():
+                    return v
+            return 0
+
+        # Siapkan dict harga spesifik untuk item ini
+        h_tenaga = {k: match_price(k) for k in row['tenaga']}
+        h_bahan = {k: match_price(k) for k in row['bahan']}
+        h_alat = {k: match_price(k) for k in row['alat']}
+
+        # Panggil Engine (Jantung Aplikasi)
+        hasil = sda_engine.hitung_rab_lengkap(
+            kode_ahsp=row['kode'],
+            uraian=row['uraian'],
+            volume=vol,
+            satuan=row['satuan'],
+            koef_tenaga=row['tenaga'], harga_tenaga=h_tenaga,
+            koef_bahan=row['bahan'], harga_bahan=h_bahan,
+            koef_alat=row['alat'], harga_alat=h_alat,
+            persen_overhead=15.0
+        )
+        
+        st.session_state.boq_sda.append(hasil)
+        st.success("Item tersimpan!")
+
+# ==========================================
+# 4. TABEL OUTPUT (RAB)
+# ==========================================
 st.divider()
-kiri, kanan = st.columns([2,1])
-with kiri: st.write(f"HSP (Dasar+15%): **Rp {(jumlah+oh):,.2f}**")
-with kanan:
-    st.metric("TOTAL", f"Rp {total:,.0f}")
-    if st.button("➕ Simpan ke RAB"):
-        st.session_state.rab_list.append({"Kode":kode, "Uraian":row['uraian'], "Vol":vol, "Total":total})
-        st.success("Tersimpan!")
+st.subheader("📋 Rekapitulasi Biaya")
 
-if st.session_state.rab_list:
-    st.markdown("---")
-    df_rab = pd.DataFrame(st.session_state.rab_list)
-    st.dataframe(df_rab, use_container_width=True)
-    st.metric("GRAND TOTAL", f"Rp {df_rab['Total'].sum():,.0f}")
-    if st.button("Reset"): st.session_state.rab_list = []; st.rerun()
+if st.session_state.boq_sda:
+    # Konversi ke Dataframe untuk tampilan tabel
+    data_tabel = []
+    for item in st.session_state.boq_sda:
+        data_tabel.append({
+            "Uraian": item['meta']['uraian'],
+            "Vol": item['meta']['volume'],
+            "Sat": item['meta']['satuan'],
+            "HSP (Rp)": item['biaya']['hsp'],
+            "Total (Rp)": item['biaya']['total_final']
+        })
+    
+    df_view = pd.DataFrame(data_tabel)
+    st.dataframe(
+        df_view, 
+        use_container_width=True,
+        column_config={
+            "HSP (Rp)": st.column_config.NumberColumn(format="Rp %.0f"),
+            "Total (Rp)": st.column_config.NumberColumn(format="Rp %.0f")
+        }
+    )
+    
+    grand_total = df_view['Total (Rp)'].sum()
+    st.markdown(f"### 💰 Total Proyek: **Rp {grand_total:,.0f}**")
+    
+    # Tombol Download Excel
+    xlsx = sda_engine.export_to_excel(df_view) # Error disini jika struktur DF beda, tapi aman utk skrg
+    st.download_button("📥 Download Excel", xlsx, "RAB_Simple.xlsx")
+    
+else:
+    st.info("RAB masih kosong. Silakan tambah item pekerjaan di atas.")
