@@ -31,11 +31,11 @@ PERSONAS = {
 }
 
 # ==========================================
-# 2. FUNGSI PEMANGGIL GEMINI 1.5 FLASH
+# 2. FUNGSI PEMANGGIL GEMINI 2.0 FLASH 🚀
 # ==========================================
 def tanya_ahli(api_key, tipe_ahli, pertanyaan):
     """
-    Mengirim prompt ke Google Gemini 1.5 Flash
+    Mengirim prompt ke Google Gemini 2.0 Flash (Model Terbaru)
     """
     if not api_key:
         return "⚠️ Mohon masukkan Google Gemini API Key terlebih dahulu."
@@ -44,21 +44,23 @@ def tanya_ahli(api_key, tipe_ahli, pertanyaan):
         # Konfigurasi API
         genai.configure(api_key=api_key)
         
-        # INI KUNCI KECEPATANNYA: MODEL FLASH ⚡
-        model = genai.GenerativeModel('gemini-1.5-flash') 
+        # --- UPDATE: MENGGUNAKAN GEMINI 2.0 FLASH ---
+        # Model ini ada di daftar API Key Anda (Index ke-2)
+        model = genai.GenerativeModel('gemini-2.0-flash') 
         
         # Ambil instruksi persona
         peran = PERSONAS.get(tipe_ahli, "Anda adalah asisten konstruksi.")
         
         # Rakit Prompt Lengkap
         full_prompt = f"""
-        SYSTEM INSTRUCTION:
+        PERAN SYSTEM:
         {peran}
 
-        USER QUESTION:
+        PERTANYAAN USER:
         {pertanyaan}
 
-        Jawablah dalam Bahasa Indonesia yang profesional, tegas, dan menggunakan format Markdown (tabel/bullet points) agar mudah dibaca.
+        INSTRUKSI OUTPUT:
+        Jawablah dalam Bahasa Indonesia. Gunakan format Markdown (Bold, List, Tabel) agar mudah dibaca oleh kontraktor.
         """
         
         # Generate Jawaban
@@ -66,4 +68,14 @@ def tanya_ahli(api_key, tipe_ahli, pertanyaan):
         return response.text
         
     except Exception as e:
-        return f"🚨 Terjadi Kesalahan: {str(e)}\n\nCek apakah API Key Anda benar atau kuota API habis."
+        # Error Handling yang ramah
+        return f"""
+        🚨 **Terjadi Kesalahan Koneksi:**
+        
+        Error: `{str(e)}`
+        
+        **Solusi:**
+        1. Cek apakah API Key Anda benar.
+        2. Pastikan Anda punya kuota gratis di Google AI Studio.
+        3. Coba refresh halaman.
+        """
